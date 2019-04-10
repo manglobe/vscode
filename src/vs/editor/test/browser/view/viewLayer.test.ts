@@ -2,10 +2,9 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
-import { RenderedLinesCollection, ILine } from 'vs/editor/browser/view/viewLayer';
+import { ILine, RenderedLinesCollection } from 'vs/editor/browser/view/viewLayer';
 
 class TestLine implements ILine {
 
@@ -40,7 +39,7 @@ function assertState(col: RenderedLinesCollection<TestLine>, state: ILinesCollec
 	assert.deepEqual(actualState, state);
 }
 
-suite('RenderedLinesCollection onModelLinesDeleted', () => {
+suite('RenderedLinesCollection onLinesDeleted', () => {
 
 	function testOnModelLinesDeleted(deleteFromLineNumber: number, deleteToLineNumber: number, expectedDeleted: string[], expectedState: ILinesCollectionState): void {
 		let col = new RenderedLinesCollection<TestLine>(() => new TestLine('new'));
@@ -50,8 +49,8 @@ suite('RenderedLinesCollection onModelLinesDeleted', () => {
 			new TestLine('old8'),
 			new TestLine('old9')
 		]);
-		let actualDeleted1 = col.onModelLinesDeleted(deleteFromLineNumber, deleteToLineNumber);
-		let actualDeleted = [];
+		let actualDeleted1 = col.onLinesDeleted(deleteFromLineNumber, deleteToLineNumber);
+		let actualDeleted: string[] = [];
 		if (actualDeleted1) {
 			actualDeleted = actualDeleted1.map(line => line.id);
 		}
@@ -315,7 +314,7 @@ suite('RenderedLinesCollection onModelLinesDeleted', () => {
 	});
 });
 
-suite('RenderedLinesCollection onModelLineChanged', () => {
+suite('RenderedLinesCollection onLineChanged', () => {
 
 	function testOnModelLineChanged(changedLineNumber: number, expectedPinged: boolean, expectedState: ILinesCollectionState): void {
 		let col = new RenderedLinesCollection<TestLine>(() => new TestLine('new'));
@@ -325,7 +324,7 @@ suite('RenderedLinesCollection onModelLineChanged', () => {
 			new TestLine('old8'),
 			new TestLine('old9')
 		]);
-		let actualPinged = col.onModelLineChanged(changedLineNumber);
+		let actualPinged = col.onLinesChanged(changedLineNumber, changedLineNumber);
 		assert.deepEqual(actualPinged, expectedPinged);
 		assertState(col, expectedState);
 	}
@@ -396,7 +395,7 @@ suite('RenderedLinesCollection onModelLineChanged', () => {
 
 });
 
-suite('RenderedLinesCollection onModelLinesInserted', () => {
+suite('RenderedLinesCollection onLinesInserted', () => {
 
 	function testOnModelLinesInserted(insertFromLineNumber: number, insertToLineNumber: number, expectedDeleted: string[], expectedState: ILinesCollectionState): void {
 		let col = new RenderedLinesCollection<TestLine>(() => new TestLine('new'));
@@ -406,8 +405,8 @@ suite('RenderedLinesCollection onModelLinesInserted', () => {
 			new TestLine('old8'),
 			new TestLine('old9')
 		]);
-		let actualDeleted1 = col.onModelLinesInserted(insertFromLineNumber, insertToLineNumber);
-		let actualDeleted = [];
+		let actualDeleted1 = col.onLinesInserted(insertFromLineNumber, insertToLineNumber);
+		let actualDeleted: string[] = [];
 		if (actualDeleted1) {
 			actualDeleted = actualDeleted1.map(line => line.id);
 		}
@@ -672,7 +671,7 @@ suite('RenderedLinesCollection onModelLinesInserted', () => {
 });
 
 
-suite('RenderedLinesCollection onModelTokensChanged', () => {
+suite('RenderedLinesCollection onTokensChanged', () => {
 
 	function testOnModelTokensChanged(changedFromLineNumber: number, changedToLineNumber: number, expectedPinged: boolean, expectedState: ILinesCollectionState): void {
 		let col = new RenderedLinesCollection<TestLine>(() => new TestLine('new'));
@@ -682,7 +681,7 @@ suite('RenderedLinesCollection onModelTokensChanged', () => {
 			new TestLine('old8'),
 			new TestLine('old9')
 		]);
-		let actualPinged = col.onModelTokensChanged([{ fromLineNumber: changedFromLineNumber, toLineNumber: changedToLineNumber }]);
+		let actualPinged = col.onTokensChanged([{ fromLineNumber: changedFromLineNumber, toLineNumber: changedToLineNumber }]);
 		assert.deepEqual(actualPinged, expectedPinged);
 		assertState(col, expectedState);
 	}

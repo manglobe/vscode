@@ -2,51 +2,32 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
-import { TimeoutTimer } from 'vs/base/common/async';
-import { onUnexpectedError } from 'vs/base/common/errors';
-import { EventEmitter } from 'vs/base/common/eventEmitter';
-import { Disposable, IDisposable } from 'vs/base/common/lifecycle';
-import { isObject } from 'vs/base/common/types';
-import { isChrome, isWebKit } from 'vs/base/browser/browser';
+import * as browser from 'vs/base/browser/browser';
+import { domEvent } from 'vs/base/browser/event';
 import { IKeyboardEvent, StandardKeyboardEvent } from 'vs/base/browser/keyboardEvent';
 import { IMouseEvent, StandardMouseEvent } from 'vs/base/browser/mouseEvent';
+import { TimeoutTimer } from 'vs/base/common/async';
 import { CharCode } from 'vs/base/common/charCode';
+import { onUnexpectedError } from 'vs/base/common/errors';
+import { Emitter, Event } from 'vs/base/common/event';
+import { Disposable, IDisposable, dispose, toDisposable } from 'vs/base/common/lifecycle';
+import * as platform from 'vs/base/common/platform';
+import { coalesce } from 'vs/base/common/arrays';
 
-export function clearNode(node: HTMLElement) {
+export function clearNode(node: HTMLElement): void {
 	while (node.firstChild) {
 		node.removeChild(node.firstChild);
 	}
 }
 
-/**
- * Calls JSON.Stringify with a replacer to break apart any circular references.
- * This prevents JSON.stringify from throwing the exception
- *  "Uncaught TypeError: Converting circular structure to JSON"
- */
-export function safeStringifyDOMAware(obj: any): string {
-	let seen: any[] = [];
-	return JSON.stringify(obj, (key, value) => {
-
-		// HTML elements are never going to serialize nicely
-		if (value instanceof Element) {
-			return '[Element]';
-		}
-
-		if (isObject(value) || Array.isArray(value)) {
-			if (seen.indexOf(value) !== -1) {
-				return '[Circular]';
-			} else {
-				seen.push(value);
-			}
-		}
-		return value;
-	});
+export function removeNode(node: HTMLElement): void {
+	if (node.parentNode) {
+		node.parentNode.removeChild(node);
+	}
 }
 
-export function isInDOM(node: Node): boolean {
+export function isInDOM(node: Node | null): boolean {
 	while (node) {
 		if (node === document.body) {
 			return true;
@@ -56,125 +37,166 @@ export function isInDOM(node: Node): boolean {
 	return false;
 }
 
-let lastStart: number, lastEnd: number;
+interface IDomClassList {
+	hasClass(node: HTMLElement, className: string): boolean;
+	addClass(node: HTMLElement, className: string): void;
+	addClasses(node: HTMLElement, ...classNames: string[]): void;
+	removeClass(node: HTMLElement, className: string): void;
+	removeClasses(node: HTMLElement, ...classNames: string[]): void;
+	toggleClass(node: HTMLElement, className: string, shouldHaveIt?: boolean): void;
+}
 
-function _findClassName(node: HTMLElement, className: string): void {
+const _manualClassList = new class implements IDomClassList {
 
-	let classes = node.className;
-	if (!classes) {
-		lastStart = -1;
-		return;
-	}
+	private _lastStart: number;
+	private _lastEnd: number;
 
-	className = className.trim();
+	private _findClassName(node: HTMLElement, className: string): void {
 
-	let classesLen = classes.length,
-		classLen = className.length;
-
-	if (classLen === 0) {
-		lastStart = -1;
-		return;
-	}
-
-	if (classesLen < classLen) {
-		lastStart = -1;
-		return;
-	}
-
-	if (classes === className) {
-		lastStart = 0;
-		lastEnd = classesLen;
-		return;
-	}
-
-	let idx = -1,
-		idxEnd: number;
-
-	while ((idx = classes.indexOf(className, idx + 1)) >= 0) {
-
-		idxEnd = idx + classLen;
-
-		// a class that is followed by another class
-		if ((idx === 0 || classes.charCodeAt(idx - 1) === CharCode.Space) && classes.charCodeAt(idxEnd) === CharCode.Space) {
-			lastStart = idx;
-			lastEnd = idxEnd + 1;
+		let classes = node.className;
+		if (!classes) {
+			this._lastStart = -1;
 			return;
 		}
 
-		// last class
-		if (idx > 0 && classes.charCodeAt(idx - 1) === CharCode.Space && idxEnd === classesLen) {
-			lastStart = idx - 1;
-			lastEnd = idxEnd;
+		className = className.trim();
+
+		let classesLen = classes.length,
+			classLen = className.length;
+
+		if (classLen === 0) {
+			this._lastStart = -1;
 			return;
 		}
 
-		// equal - duplicate of cmp above
-		if (idx === 0 && idxEnd === classesLen) {
-			lastStart = 0;
-			lastEnd = idxEnd;
+		if (classesLen < classLen) {
+			this._lastStart = -1;
 			return;
 		}
+
+		if (classes === className) {
+			this._lastStart = 0;
+			this._lastEnd = classesLen;
+			return;
+		}
+
+		let idx = -1,
+			idxEnd: number;
+
+		while ((idx = classes.indexOf(className, idx + 1)) >= 0) {
+
+			idxEnd = idx + classLen;
+
+			// a class that is followed by another class
+			if ((idx === 0 || classes.charCodeAt(idx - 1) === CharCode.Space) && classes.charCodeAt(idxEnd) === CharCode.Space) {
+				this._lastStart = idx;
+				this._lastEnd = idxEnd + 1;
+				return;
+			}
+
+			// last class
+			if (idx > 0 && classes.charCodeAt(idx - 1) === CharCode.Space && idxEnd === classesLen) {
+				this._lastStart = idx - 1;
+				this._lastEnd = idxEnd;
+				return;
+			}
+
+			// equal - duplicate of cmp above
+			if (idx === 0 && idxEnd === classesLen) {
+				this._lastStart = 0;
+				this._lastEnd = idxEnd;
+				return;
+			}
+		}
+
+		this._lastStart = -1;
 	}
 
-	lastStart = -1;
-}
+	hasClass(node: HTMLElement, className: string): boolean {
+		this._findClassName(node, className);
+		return this._lastStart !== -1;
+	}
 
-/**
- * @param node a dom node
- * @param className a class name
- * @return true if the className attribute of the provided node contains the provided className
- */
-export function hasClass(node: HTMLElement, className: string): boolean {
-	_findClassName(node, className);
-	return lastStart !== -1;
-}
+	addClasses(node: HTMLElement, ...classNames: string[]): void {
+		classNames.forEach(nameValue => nameValue.split(' ').forEach(name => this.addClass(node, name)));
+	}
 
-/**
- * Adds the provided className to the provided node. This is a no-op
- * if the class is already set.
- * @param node a dom node
- * @param className a class name
- */
-export function addClass(node: HTMLElement, className: string): void {
-	if (!node.className) { // doesn't have it for sure
-		node.className = className;
-	} else {
-		_findClassName(node, className); // see if it's already there
-		if (lastStart === -1) {
-			node.className = node.className + ' ' + className;
+	addClass(node: HTMLElement, className: string): void {
+		if (!node.className) { // doesn't have it for sure
+			node.className = className;
+		} else {
+			this._findClassName(node, className); // see if it's already there
+			if (this._lastStart === -1) {
+				node.className = node.className + ' ' + className;
+			}
 		}
 	}
-}
 
-/**
- * Removes the className for the provided node. This is a no-op
- * if the class isn't present.
- * @param node a dom node
- * @param className a class name
- */
-export function removeClass(node: HTMLElement, className: string): void {
-	_findClassName(node, className);
-	if (lastStart === -1) {
-		return; // Prevent styles invalidation if not necessary
-	} else {
-		node.className = node.className.substring(0, lastStart) + node.className.substring(lastEnd);
+	removeClass(node: HTMLElement, className: string): void {
+		this._findClassName(node, className);
+		if (this._lastStart === -1) {
+			return; // Prevent styles invalidation if not necessary
+		} else {
+			node.className = node.className.substring(0, this._lastStart) + node.className.substring(this._lastEnd);
+		}
 	}
-}
 
-/**
- * @param node a dom node
- * @param className a class name
- * @param shouldHaveIt
- */
-export function toggleClass(node: HTMLElement, className: string, shouldHaveIt?: boolean): void {
-	_findClassName(node, className);
-	if (lastStart !== -1 && (shouldHaveIt === void 0 || !shouldHaveIt)) {
-		removeClass(node, className);
+	removeClasses(node: HTMLElement, ...classNames: string[]): void {
+		classNames.forEach(nameValue => nameValue.split(' ').forEach(name => this.removeClass(node, name)));
 	}
-	if (lastStart === -1 && (shouldHaveIt === void 0 || shouldHaveIt)) {
-		addClass(node, className);
+
+	toggleClass(node: HTMLElement, className: string, shouldHaveIt?: boolean): void {
+		this._findClassName(node, className);
+		if (this._lastStart !== -1 && (shouldHaveIt === undefined || !shouldHaveIt)) {
+			this.removeClass(node, className);
+		}
+		if (this._lastStart === -1 && (shouldHaveIt === undefined || shouldHaveIt)) {
+			this.addClass(node, className);
+		}
 	}
-}
+};
+
+const _nativeClassList = new class implements IDomClassList {
+	hasClass(node: HTMLElement, className: string): boolean {
+		return Boolean(className) && node.classList && node.classList.contains(className);
+	}
+
+	addClasses(node: HTMLElement, ...classNames: string[]): void {
+		classNames.forEach(nameValue => nameValue.split(' ').forEach(name => this.addClass(node, name)));
+	}
+
+	addClass(node: HTMLElement, className: string): void {
+		if (className && node.classList) {
+			node.classList.add(className);
+		}
+	}
+
+	removeClass(node: HTMLElement, className: string): void {
+		if (className && node.classList) {
+			node.classList.remove(className);
+		}
+	}
+
+	removeClasses(node: HTMLElement, ...classNames: string[]): void {
+		classNames.forEach(nameValue => nameValue.split(' ').forEach(name => this.removeClass(node, name)));
+	}
+
+	toggleClass(node: HTMLElement, className: string, shouldHaveIt?: boolean): void {
+		if (node.classList) {
+			node.classList.toggle(className, shouldHaveIt);
+		}
+	}
+};
+
+// In IE11 there is only partial support for `classList` which makes us keep our
+// custom implementation. Otherwise use the native implementation, see: http://caniuse.com/#search=classlist
+const _classList: IDomClassList = browser.isIE ? _manualClassList : _nativeClassList;
+export const hasClass: (node: HTMLElement, className: string) => boolean = _classList.hasClass.bind(_classList);
+export const addClass: (node: HTMLElement, className: string) => void = _classList.addClass.bind(_classList);
+export const addClasses: (node: HTMLElement, ...classNames: string[]) => void = _classList.addClasses.bind(_classList);
+export const removeClass: (node: HTMLElement, className: string) => void = _classList.removeClass.bind(_classList);
+export const removeClasses: (node: HTMLElement, ...classNames: string[]) => void = _classList.removeClasses.bind(_classList);
+export const toggleClass: (node: HTMLElement, className: string, shouldHaveIt?: boolean) => void = _classList.toggleClass.bind(_classList);
 
 class DomListener implements IDisposable {
 
@@ -183,7 +205,7 @@ class DomListener implements IDisposable {
 	private readonly _type: string;
 	private readonly _useCapture: boolean;
 
-	constructor(node: Element | Window | Document, type: string, handler: (e: any) => void, useCapture: boolean) {
+	constructor(node: Element | Window | Document, type: string, handler: (e: any) => void, useCapture?: boolean) {
 		this._node = node;
 		this._type = type;
 		this._handler = handler;
@@ -200,17 +222,20 @@ class DomListener implements IDisposable {
 		this._node.removeEventListener(this._type, this._handler, this._useCapture);
 
 		// Prevent leakers from holding on to the dom or handler func
-		this._node = null;
-		this._handler = null;
+		this._node = null!;
+		this._handler = null!;
 	}
 }
 
+export function addDisposableListener<K extends keyof GlobalEventHandlersEventMap>(node: Element | Window | Document, type: K, handler: (event: GlobalEventHandlersEventMap[K]) => void, useCapture?: boolean): IDisposable;
+export function addDisposableListener(node: Element | Window | Document, type: string, handler: (event: any) => void, useCapture?: boolean): IDisposable;
 export function addDisposableListener(node: Element | Window | Document, type: string, handler: (event: any) => void, useCapture?: boolean): IDisposable {
 	return new DomListener(node, type, handler, useCapture);
 }
 
 export interface IAddStandardDisposableListenerSignature {
 	(node: HTMLElement, type: 'click', handler: (event: IMouseEvent) => void, useCapture?: boolean): IDisposable;
+	(node: HTMLElement, type: 'mousedown', handler: (event: IMouseEvent) => void, useCapture?: boolean): IDisposable;
 	(node: HTMLElement, type: 'keydown', handler: (event: IKeyboardEvent) => void, useCapture?: boolean): IDisposable;
 	(node: HTMLElement, type: 'keypress', handler: (event: IKeyboardEvent) => void, useCapture?: boolean): IDisposable;
 	(node: HTMLElement, type: 'keyup', handler: (event: IKeyboardEvent) => void, useCapture?: boolean): IDisposable;
@@ -229,7 +254,7 @@ function _wrapAsStandardKeyboardEvent(handler: (e: IKeyboardEvent) => void): (e:
 export let addStandardDisposableListener: IAddStandardDisposableListenerSignature = function addStandardDisposableListener(node: HTMLElement, type: string, handler: (event: any) => void, useCapture?: boolean): IDisposable {
 	let wrapHandler = handler;
 
-	if (type === 'click') {
+	if (type === 'click' || type === 'mousedown') {
 		wrapHandler = _wrapAsStandardMouseEvent(handler);
 	} else if (type === 'keydown' || type === 'keypress' || type === 'keyup') {
 		wrapHandler = _wrapAsStandardKeyboardEvent(handler);
@@ -241,7 +266,7 @@ export let addStandardDisposableListener: IAddStandardDisposableListenerSignatur
 export function addDisposableNonBubblingMouseOutListener(node: Element, handler: (event: MouseEvent) => void): IDisposable {
 	return addDisposableListener(node, 'mouseout', (e: MouseEvent) => {
 		// Mouse out bubbles, so this is an attempt to ignore faux mouse outs coming from children elements
-		let toElement = <Node>(e.relatedTarget || e.toElement);
+		let toElement: Node | null = <Node>(e.relatedTarget || e.target);
 		while (toElement && toElement !== node) {
 			toElement = toElement.parentNode;
 		}
@@ -253,41 +278,26 @@ export function addDisposableNonBubblingMouseOutListener(node: Element, handler:
 	});
 }
 
-const _animationFrame = (function () {
-	let emulatedRequestAnimationFrame = (callback: (time: number) => void): number => {
-		return setTimeout(() => callback(new Date().getTime()), 0);
-	};
-	let nativeRequestAnimationFrame: (callback: (time: number) => void) => number =
-		self.requestAnimationFrame
-		|| (<any>self).msRequestAnimationFrame
-		|| (<any>self).webkitRequestAnimationFrame
-		|| (<any>self).mozRequestAnimationFrame
-		|| (<any>self).oRequestAnimationFrame;
-
-
-
-	let emulatedCancelAnimationFrame = (id: number) => { };
-	let nativeCancelAnimationFrame: (id: number) => void =
-		self.cancelAnimationFrame || (<any>self).cancelRequestAnimationFrame
-		|| (<any>self).msCancelAnimationFrame || (<any>self).msCancelRequestAnimationFrame
-		|| (<any>self).webkitCancelAnimationFrame || (<any>self).webkitCancelRequestAnimationFrame
-		|| (<any>self).mozCancelAnimationFrame || (<any>self).mozCancelRequestAnimationFrame
-		|| (<any>self).oCancelAnimationFrame || (<any>self).oCancelRequestAnimationFrame;
-
-	let isNative = !!nativeRequestAnimationFrame;
-	let request = nativeRequestAnimationFrame || emulatedRequestAnimationFrame;
-	let cancel = nativeCancelAnimationFrame || emulatedCancelAnimationFrame;
-
-	return {
-		isNative: isNative,
-		request: (callback: (time: number) => void): number => {
-			return request(callback);
-		},
-		cancel: (id: number) => {
-			return cancel(id);
-		}
-	};
-})();
+interface IRequestAnimationFrame {
+	(callback: (time: number) => void): number;
+}
+let _animationFrame: IRequestAnimationFrame | null = null;
+function doRequestAnimationFrame(callback: (time: number) => void): number {
+	if (!_animationFrame) {
+		const emulatedRequestAnimationFrame = (callback: (time: number) => void): any => {
+			return setTimeout(() => callback(new Date().getTime()), 0);
+		};
+		_animationFrame = (
+			self.requestAnimationFrame
+			|| (<any>self).msRequestAnimationFrame
+			|| (<any>self).webkitRequestAnimationFrame
+			|| (<any>self).mozRequestAnimationFrame
+			|| (<any>self).oRequestAnimationFrame
+			|| emulatedRequestAnimationFrame
+		);
+	}
+	return _animationFrame.call(self, callback);
+}
 
 /**
  * Schedule a callback to be run at the next animation frame.
@@ -310,7 +320,7 @@ class AnimationFrameQueueItem implements IDisposable {
 	public priority: number;
 	private _canceled: boolean;
 
-	constructor(runner: () => void, priority: number) {
+	constructor(runner: () => void, priority: number = 0) {
 		this._runner = runner;
 		this.priority = priority;
 		this._canceled = false;
@@ -346,7 +356,7 @@ class AnimationFrameQueueItem implements IDisposable {
 	/**
 	 * The runners scheduled at the current animation frame
 	 */
-	let CURRENT_QUEUE: AnimationFrameQueueItem[] = null;
+	let CURRENT_QUEUE: AnimationFrameQueueItem[] | null = null;
 	/**
 	 * A flag to keep track if the native requestAnimationFrame was already called
 	 */
@@ -365,7 +375,7 @@ class AnimationFrameQueueItem implements IDisposable {
 		inAnimationFrameRunner = true;
 		while (CURRENT_QUEUE.length > 0) {
 			CURRENT_QUEUE.sort(AnimationFrameQueueItem.sort);
-			let top = CURRENT_QUEUE.shift();
+			let top = CURRENT_QUEUE.shift()!;
 			top.execute();
 		}
 		inAnimationFrameRunner = false;
@@ -377,21 +387,7 @@ class AnimationFrameQueueItem implements IDisposable {
 
 		if (!animFrameRequested) {
 			animFrameRequested = true;
-
-			// TODO@Alex: also check if it is electron
-			if (isChrome) {
-				let handle: number;
-				_animationFrame.request(function () {
-					clearTimeout(handle);
-					animationFrameRunner();
-				});
-				// This is a fallback in-case chrome dropped
-				// the request for an animation frame. This
-				// is sick but was spotted in the wild
-				handle = setTimeout(animationFrameRunner, 1000);
-			} else {
-				_animationFrame.request(animationFrameRunner);
-			}
+			doRequestAnimationFrame(animationFrameRunner);
 		}
 
 		return item;
@@ -400,7 +396,7 @@ class AnimationFrameQueueItem implements IDisposable {
 	runAtThisOrScheduleAtNextAnimationFrame = (runner: () => void, priority?: number) => {
 		if (inAnimationFrameRunner) {
 			let item = new AnimationFrameQueueItem(runner, priority);
-			CURRENT_QUEUE.push(item);
+			CURRENT_QUEUE!.push(item);
 			return item;
 		} else {
 			return scheduleAtNextAnimationFrame(runner, priority);
@@ -408,30 +404,43 @@ class AnimationFrameQueueItem implements IDisposable {
 	};
 })();
 
+export function measure(callback: () => void): IDisposable {
+	return scheduleAtNextAnimationFrame(callback, 10000 /* must be early */);
+}
+
+export function modify(callback: () => void): IDisposable {
+	return scheduleAtNextAnimationFrame(callback, -10000 /* must be late */);
+}
+
 /**
  * Add a throttled listener. `handler` is fired at most every 16ms or with the next animation frame (if browser supports it).
  */
-export interface IEventMerger<R> {
-	(lastEvent: R, currentEvent: Event): R;
+export interface IEventMerger<R, E> {
+	(lastEvent: R | null, currentEvent: E): R;
+}
+
+export interface DOMEvent {
+	preventDefault(): void;
+	stopPropagation(): void;
 }
 
 const MINIMUM_TIME_MS = 16;
-const DEFAULT_EVENT_MERGER: IEventMerger<Event> = function (lastEvent: Event, currentEvent: Event) {
+const DEFAULT_EVENT_MERGER: IEventMerger<DOMEvent, DOMEvent> = function (lastEvent: DOMEvent, currentEvent: DOMEvent) {
 	return currentEvent;
 };
 
-class TimeoutThrottledDomListener<R> extends Disposable {
+class TimeoutThrottledDomListener<R, E extends DOMEvent> extends Disposable {
 
-	constructor(node: any, type: string, handler: (event: R) => void, eventMerger: IEventMerger<R> = <any>DEFAULT_EVENT_MERGER, minimumTimeMs: number = MINIMUM_TIME_MS) {
+	constructor(node: any, type: string, handler: (event: R) => void, eventMerger: IEventMerger<R, E> = <any>DEFAULT_EVENT_MERGER, minimumTimeMs: number = MINIMUM_TIME_MS) {
 		super();
 
-		let lastEvent: R = null;
+		let lastEvent: R | null = null;
 		let lastHandlerTime = 0;
 		let timeout = this._register(new TimeoutTimer());
 
 		let invokeHandler = () => {
 			lastHandlerTime = (new Date()).getTime();
-			handler(lastEvent);
+			handler(<R>lastEvent);
 			lastEvent = null;
 		};
 
@@ -450,12 +459,12 @@ class TimeoutThrottledDomListener<R> extends Disposable {
 	}
 }
 
-export function addDisposableThrottledListener<R>(node: any, type: string, handler: (event: R) => void, eventMerger?: IEventMerger<R>, minimumTimeMs?: number): IDisposable {
-	return new TimeoutThrottledDomListener<R>(node, type, handler, eventMerger, minimumTimeMs);
+export function addDisposableThrottledListener<R, E extends DOMEvent = DOMEvent>(node: any, type: string, handler: (event: R) => void, eventMerger?: IEventMerger<R, E>, minimumTimeMs?: number): IDisposable {
+	return new TimeoutThrottledDomListener<R, E>(node, type, handler, eventMerger, minimumTimeMs);
 }
 
 export function getComputedStyle(el: HTMLElement): CSSStyleDeclaration {
-	return document.defaultView.getComputedStyle(el, null);
+	return document.defaultView!.getComputedStyle(el, null);
 }
 
 // Adapted from WinJS
@@ -480,16 +489,41 @@ function getDimension(element: HTMLElement, cssPropertyName: string, jsPropertyN
 	return convertToPixels(element, value);
 }
 
+export function getClientArea(element: HTMLElement): Dimension {
+
+	// Try with DOM clientWidth / clientHeight
+	if (element !== document.body) {
+		return new Dimension(element.clientWidth, element.clientHeight);
+	}
+
+	// Try innerWidth / innerHeight
+	if (window.innerWidth && window.innerHeight) {
+		return new Dimension(window.innerWidth, window.innerHeight);
+	}
+
+	// Try with document.body.clientWidth / document.body.clientHeight
+	if (document.body && document.body.clientWidth && document.body.clientHeight) {
+		return new Dimension(document.body.clientWidth, document.body.clientHeight);
+	}
+
+	// Try with document.documentElement.clientWidth / document.documentElement.clientHeight
+	if (document.documentElement && document.documentElement.clientWidth && document.documentElement.clientHeight) {
+		return new Dimension(document.documentElement.clientWidth, document.documentElement.clientHeight);
+	}
+
+	throw new Error('Unable to figure out browser width and height');
+}
+
 const sizeUtils = {
 
 	getBorderLeftWidth: function (element: HTMLElement): number {
 		return getDimension(element, 'border-left-width', 'borderLeftWidth');
 	},
-	getBorderTopWidth: function (element: HTMLElement): number {
-		return getDimension(element, 'border-top-width', 'borderTopWidth');
-	},
 	getBorderRightWidth: function (element: HTMLElement): number {
 		return getDimension(element, 'border-right-width', 'borderRightWidth');
+	},
+	getBorderTopWidth: function (element: HTMLElement): number {
+		return getDimension(element, 'border-top-width', 'borderTopWidth');
 	},
 	getBorderBottomWidth: function (element: HTMLElement): number {
 		return getDimension(element, 'border-bottom-width', 'borderBottomWidth');
@@ -498,11 +532,11 @@ const sizeUtils = {
 	getPaddingLeft: function (element: HTMLElement): number {
 		return getDimension(element, 'padding-left', 'paddingLeft');
 	},
-	getPaddingTop: function (element: HTMLElement): number {
-		return getDimension(element, 'padding-top', 'paddingTop');
-	},
 	getPaddingRight: function (element: HTMLElement): number {
 		return getDimension(element, 'padding-right', 'paddingRight');
+	},
+	getPaddingTop: function (element: HTMLElement): number {
+		return getDimension(element, 'padding-top', 'paddingTop');
 	},
 	getPaddingBottom: function (element: HTMLElement): number {
 		return getDimension(element, 'padding-bottom', 'paddingBottom');
@@ -525,6 +559,26 @@ const sizeUtils = {
 
 // ----------------------------------------------------------------------------------------
 // Position & Dimension
+
+export class Dimension {
+	public width: number;
+	public height: number;
+
+	constructor(width: number, height: number) {
+		this.width = width;
+		this.height = height;
+	}
+
+	static equals(a: Dimension | undefined, b: Dimension | undefined): boolean {
+		if (a === b) {
+			return true;
+		}
+		if (!a || !b) {
+			return false;
+		}
+		return a.width === b.width && a.height === b.height;
+	}
+}
 
 export function getTopLeftOffset(element: HTMLElement): { left: number; top: number; } {
 	// Adapted from WinJS.Utilities.getPosition
@@ -561,6 +615,36 @@ export interface IDomNodePagePosition {
 	height: number;
 }
 
+export function size(element: HTMLElement, width: number | null, height: number | null): void {
+	if (typeof width === 'number') {
+		element.style.width = `${width}px`;
+	}
+
+	if (typeof height === 'number') {
+		element.style.height = `${height}px`;
+	}
+}
+
+export function position(element: HTMLElement, top: number, right?: number, bottom?: number, left?: number, position: string = 'absolute'): void {
+	if (typeof top === 'number') {
+		element.style.top = `${top}px`;
+	}
+
+	if (typeof right === 'number') {
+		element.style.right = `${right}px`;
+	}
+
+	if (typeof bottom === 'number') {
+		element.style.bottom = `${bottom}px`;
+	}
+
+	if (typeof left === 'number') {
+		element.style.left = `${left}px`;
+	}
+
+	element.style.position = position;
+}
+
 /**
  * Returns the position of a dom node relative to the entire page.
  */
@@ -575,17 +659,17 @@ export function getDomNodePagePosition(domNode: HTMLElement): IDomNodePagePositi
 }
 
 export interface IStandardWindow {
-	scrollX: number;
-	scrollY: number;
+	readonly scrollX: number;
+	readonly scrollY: number;
 }
 
-export const StandardWindow: IStandardWindow = new class {
+export const StandardWindow: IStandardWindow = new class implements IStandardWindow {
 	get scrollX(): number {
 		if (typeof window.scrollX === 'number') {
 			// modern browsers
 			return window.scrollX;
 		} else {
-			return document.body.scrollLeft + document.documentElement.scrollLeft;
+			return document.body.scrollLeft + document.documentElement!.scrollLeft;
 		}
 	}
 
@@ -594,24 +678,22 @@ export const StandardWindow: IStandardWindow = new class {
 			// modern browsers
 			return window.scrollY;
 		} else {
-			return document.body.scrollTop + document.documentElement.scrollTop;
+			return document.body.scrollTop + document.documentElement!.scrollTop;
 		}
 	}
 };
-
-// Adapted from WinJS
-// Gets the width of the content of the specified element. The content width does not include borders or padding.
-export function getContentWidth(element: HTMLElement): number {
-	let border = sizeUtils.getBorderLeftWidth(element) + sizeUtils.getBorderRightWidth(element);
-	let padding = sizeUtils.getPaddingLeft(element) + sizeUtils.getPaddingRight(element);
-	return element.offsetWidth - border - padding;
-}
 
 // Adapted from WinJS
 // Gets the width of the element, including margins.
 export function getTotalWidth(element: HTMLElement): number {
 	let margin = sizeUtils.getMarginLeft(element) + sizeUtils.getMarginRight(element);
 	return element.offsetWidth + margin;
+}
+
+export function getContentWidth(element: HTMLElement): number {
+	let border = sizeUtils.getBorderLeftWidth(element) + sizeUtils.getBorderRightWidth(element);
+	let padding = sizeUtils.getPaddingLeft(element) + sizeUtils.getPaddingRight(element);
+	return element.offsetWidth - border - padding;
 }
 
 export function getTotalScrollWidth(element: HTMLElement): number {
@@ -655,7 +737,7 @@ export function getLargestChildWidth(parent: HTMLElement, children: HTMLElement[
 
 // ----------------------------------------------------------------------------------------
 
-export function isAncestor(testChild: Node, testAncestor: Node): boolean {
+export function isAncestor(testChild: Node | null, testAncestor: Node | null): boolean {
 	while (testChild) {
 		if (testChild === testAncestor) {
 			return true;
@@ -666,14 +748,22 @@ export function isAncestor(testChild: Node, testAncestor: Node): boolean {
 	return false;
 }
 
-export function findParentWithClass(node: HTMLElement, clazz: string, stopAtClazz?: string): HTMLElement {
+export function findParentWithClass(node: HTMLElement, clazz: string, stopAtClazzOrNode?: string | HTMLElement): HTMLElement | null {
 	while (node) {
 		if (hasClass(node, clazz)) {
 			return node;
 		}
 
-		if (stopAtClazz && hasClass(node, stopAtClazz)) {
-			return null;
+		if (stopAtClazzOrNode) {
+			if (typeof stopAtClazzOrNode === 'string') {
+				if (hasClass(node, stopAtClazzOrNode)) {
+					return null;
+				}
+			} else {
+				if (node === stopAtClazzOrNode) {
+					return null;
+				}
+			}
 		}
 
 		node = <HTMLElement>node.parentNode;
@@ -682,15 +772,21 @@ export function findParentWithClass(node: HTMLElement, clazz: string, stopAtClaz
 	return null;
 }
 
-export function createStyleSheet(): HTMLStyleElement {
+export function createStyleSheet(container: HTMLElement = document.getElementsByTagName('head')[0]): HTMLStyleElement {
 	let style = document.createElement('style');
 	style.type = 'text/css';
 	style.media = 'screen';
-	document.getElementsByTagName('head')[0].appendChild(style);
+	container.appendChild(style);
 	return style;
 }
 
-const sharedStyle = <any>createStyleSheet();
+let _sharedStyleSheet: HTMLStyleElement | null = null;
+function getSharedStyleSheet(): HTMLStyleElement {
+	if (!_sharedStyleSheet) {
+		_sharedStyleSheet = createStyleSheet();
+	}
+	return _sharedStyleSheet;
+}
 
 function getDynamicStyleSheetRules(style: any) {
 	if (style && style.sheet && style.sheet.rules) {
@@ -704,32 +800,15 @@ function getDynamicStyleSheetRules(style: any) {
 	return [];
 }
 
-export function createCSSRule(selector: string, cssText: string, style: HTMLStyleElement = sharedStyle): void {
+export function createCSSRule(selector: string, cssText: string, style: HTMLStyleElement = getSharedStyleSheet()): void {
 	if (!style || !cssText) {
 		return;
 	}
 
-	(<any>style.sheet).insertRule(selector + '{' + cssText + '}', 0);
+	(<CSSStyleSheet>style.sheet).insertRule(selector + '{' + cssText + '}', 0);
 }
 
-export function getCSSRule(selector: string, style: HTMLStyleElement = sharedStyle): any {
-	if (!style) {
-		return null;
-	}
-
-	let rules = getDynamicStyleSheetRules(style);
-	for (let i = 0; i < rules.length; i++) {
-		let rule = rules[i];
-		let normalizedSelectorText = rule.selectorText.replace(/::/gi, ':');
-		if (normalizedSelectorText === selector) {
-			return rule;
-		}
-	}
-
-	return null;
-}
-
-export function removeCSSRulesContainingSelector(ruleName: string, style = sharedStyle): void {
+export function removeCSSRulesContainingSelector(ruleName: string, style: HTMLStyleElement = getSharedStyleSheet()): void {
 	if (!style) {
 		return;
 	}
@@ -738,14 +817,13 @@ export function removeCSSRulesContainingSelector(ruleName: string, style = share
 	let toDelete: number[] = [];
 	for (let i = 0; i < rules.length; i++) {
 		let rule = rules[i];
-		let normalizedSelectorText = rule.selectorText.replace(/::/gi, ':');
-		if (normalizedSelectorText.indexOf(ruleName) !== -1) {
+		if (rule.selectorText.indexOf(ruleName) !== -1) {
 			toDelete.push(i);
 		}
 	}
 
 	for (let i = toDelete.length - 1; i >= 0; i--) {
-		style.sheet.deleteRule(toDelete[i]);
+		(<any>style.sheet).deleteRule(toDelete[i]);
 	}
 }
 
@@ -758,48 +836,52 @@ export function isHTMLElement(o: any): o is HTMLElement {
 
 export const EventType = {
 	// Mouse
-	CLICK: 'click',
-	DBLCLICK: 'dblclick',
-	MOUSE_UP: 'mouseup',
-	MOUSE_DOWN: 'mousedown',
-	MOUSE_OVER: 'mouseover',
-	MOUSE_MOVE: 'mousemove',
-	MOUSE_OUT: 'mouseout',
-	CONTEXT_MENU: 'contextmenu',
-	WHEEL: 'wheel',
+	CLICK: 'click' as 'click',
+	DBLCLICK: 'dblclick' as 'dblclick',
+	MOUSE_UP: 'mouseup' as 'mouseup',
+	MOUSE_DOWN: 'mousedown' as 'mousedown',
+	MOUSE_OVER: 'mouseover' as 'mouseover',
+	MOUSE_MOVE: 'mousemove' as 'mousemove',
+	MOUSE_OUT: 'mouseout' as 'mouseout',
+	MOUSE_ENTER: 'mouseenter' as 'mouseenter',
+	MOUSE_LEAVE: 'mouseleave' as 'mouseleave',
+	CONTEXT_MENU: 'contextmenu' as 'contextmenu',
+	WHEEL: 'wheel' as 'wheel',
 	// Keyboard
-	KEY_DOWN: 'keydown',
-	KEY_PRESS: 'keypress',
-	KEY_UP: 'keyup',
+	KEY_DOWN: 'keydown' as 'keydown',
+	KEY_PRESS: 'keypress' as 'keypress',
+	KEY_UP: 'keyup' as 'keyup',
 	// HTML Document
-	LOAD: 'load',
-	UNLOAD: 'unload',
-	ABORT: 'abort',
-	ERROR: 'error',
-	RESIZE: 'resize',
-	SCROLL: 'scroll',
+	LOAD: 'load' as 'load',
+	UNLOAD: 'unload' as 'unload',
+	ABORT: 'abort' as 'abort',
+	ERROR: 'error' as 'error',
+	RESIZE: 'resize' as 'resize',
+	SCROLL: 'scroll' as 'scroll',
 	// Form
-	SELECT: 'select',
-	CHANGE: 'change',
-	SUBMIT: 'submit',
-	RESET: 'reset',
-	FOCUS: 'focus',
-	BLUR: 'blur',
-	INPUT: 'input',
+	SELECT: 'select' as 'select',
+	CHANGE: 'change' as 'change',
+	SUBMIT: 'submit' as 'submit',
+	RESET: 'reset' as 'reset',
+	FOCUS: 'focus' as 'focus',
+	FOCUS_IN: 'focusin' as 'focusin',
+	FOCUS_OUT: 'focusout' as 'focusout',
+	BLUR: 'blur' as 'blur',
+	INPUT: 'input' as 'input',
 	// Local Storage
-	STORAGE: 'storage',
+	STORAGE: 'storage' as 'storage',
 	// Drag
-	DRAG_START: 'dragstart',
-	DRAG: 'drag',
-	DRAG_ENTER: 'dragenter',
-	DRAG_LEAVE: 'dragleave',
-	DRAG_OVER: 'dragover',
-	DROP: 'drop',
-	DRAG_END: 'dragend',
+	DRAG_START: 'dragstart' as 'dragstart',
+	DRAG: 'drag' as 'drag',
+	DRAG_ENTER: 'dragenter' as 'dragenter',
+	DRAG_LEAVE: 'dragleave' as 'dragleave',
+	DRAG_OVER: 'dragover' as 'dragover',
+	DROP: 'drop' as 'drop',
+	DRAG_END: 'dragend' as 'dragend',
 	// Animation
-	ANIMATION_START: isWebKit ? 'webkitAnimationStart' : 'animationstart',
-	ANIMATION_END: isWebKit ? 'webkitAnimationEnd' : 'animationend',
-	ANIMATION_ITERATION: isWebKit ? 'webkitAnimationIteration' : 'animationiteration'
+	ANIMATION_START: browser.isWebKit ? 'webkitAnimationStart' : 'animationstart',
+	ANIMATION_END: browser.isWebKit ? 'webkitAnimationEnd' : 'animationend',
+	ANIMATION_ITERATION: browser.isWebKit ? 'webkitAnimationIteration' : 'animationiteration'
 };
 
 export interface EventLike {
@@ -828,8 +910,8 @@ export const EventHelper = {
 };
 
 export interface IFocusTracker {
-	addBlurListener(fn: () => void): IDisposable;
-	addFocusListener(fn: () => void): IDisposable;
+	onDidFocus: Event<void>;
+	onDidBlur: Event<void>;
 	dispose(): void;
 }
 
@@ -851,49 +933,49 @@ export function restoreParentsScrollTop(node: Element, state: number[]): void {
 	}
 }
 
-class FocusTracker extends Disposable implements IFocusTracker {
+class FocusTracker implements IFocusTracker {
 
-	private _eventEmitter: EventEmitter;
+	private _onDidFocus = new Emitter<void>();
+	readonly onDidFocus: Event<void> = this._onDidFocus.event;
+
+	private _onDidBlur = new Emitter<void>();
+	readonly onDidBlur: Event<void> = this._onDidBlur.event;
+
+	private disposables: IDisposable[] = [];
 
 	constructor(element: HTMLElement | Window) {
-		super();
-
-		let hasFocus = false;
+		let hasFocus = isAncestor(document.activeElement, <HTMLElement>element);
 		let loosingFocus = false;
 
-		this._eventEmitter = this._register(new EventEmitter());
-
-		let onFocus = (event: Event) => {
+		let onFocus = () => {
 			loosingFocus = false;
 			if (!hasFocus) {
 				hasFocus = true;
-				this._eventEmitter.emit('focus', {});
+				this._onDidFocus.fire();
 			}
 		};
 
-		let onBlur = (event: Event) => {
+		let onBlur = () => {
 			if (hasFocus) {
 				loosingFocus = true;
 				window.setTimeout(() => {
 					if (loosingFocus) {
 						loosingFocus = false;
 						hasFocus = false;
-						this._eventEmitter.emit('blur', {});
+						this._onDidBlur.fire();
 					}
 				}, 0);
 			}
 		};
 
-		this._register(addDisposableListener(element, EventType.FOCUS, onFocus, true));
-		this._register(addDisposableListener(element, EventType.BLUR, onBlur, true));
+		domEvent(element, EventType.FOCUS, true)(onFocus, null, this.disposables);
+		domEvent(element, EventType.BLUR, true)(onBlur, null, this.disposables);
 	}
 
-	public addFocusListener(fn: () => void): IDisposable {
-		return this._eventEmitter.addListener2('focus', fn);
-	}
-
-	public addBlurListener(fn: () => void): IDisposable {
-		return this._eventEmitter.addListener2('blur', fn);
+	dispose(): void {
+		this.disposables = dispose(this.disposables);
+		this._onDidFocus.dispose();
+		this._onDidBlur.dispose();
 	}
 }
 
@@ -913,8 +995,7 @@ export function prepend<T extends Node>(parent: HTMLElement, child: T): T {
 
 const SELECTOR_REGEX = /([\w\-]+)?(#([\w\-]+))?((.([\w\-]+))*)/;
 
-// Similar to builder, but much more lightweight
-export function $<T extends HTMLElement>(description: string, attrs?: { [key: string]: any; }, ...children: (Node | string)[]): T {
+export function $<T extends HTMLElement>(description: string, attrs?: { [key: string]: any; }, ...children: Array<Node | string>): T {
 	let match = SELECTOR_REGEX.exec(description);
 
 	if (!match) {
@@ -930,22 +1011,22 @@ export function $<T extends HTMLElement>(description: string, attrs?: { [key: st
 		result.className = match[4].replace(/\./g, ' ').trim();
 	}
 
-	Object.keys(attrs || {}).forEach(name => {
+	attrs = attrs || {};
+	Object.keys(attrs).forEach(name => {
+		const value = attrs![name];
 		if (/^on\w+$/.test(name)) {
-			result[name] = attrs[name];
+			(<any>result)[name] = value;
 		} else if (name === 'selected') {
-			const value = attrs[name];
 			if (value) {
 				result.setAttribute(name, 'true');
 			}
 
 		} else {
-			result.setAttribute(name, attrs[name]);
+			result.setAttribute(name, value);
 		}
 	});
 
-	children
-		.filter(child => !!child)
+	coalesce(children)
 		.forEach(child => {
 			if (child instanceof Node) {
 				result.appendChild(child);
@@ -978,16 +1059,18 @@ export function join(nodes: Node[], separator: Node | string): Node[] {
 export function show(...elements: HTMLElement[]): void {
 	for (let element of elements) {
 		element.style.display = '';
+		element.removeAttribute('aria-hidden');
 	}
 }
 
 export function hide(...elements: HTMLElement[]): void {
 	for (let element of elements) {
 		element.style.display = 'none';
+		element.setAttribute('aria-hidden', 'true');
 	}
 }
 
-function findParentWithAttribute(node: Node, attribute: string): HTMLElement {
+function findParentWithAttribute(node: Node | null, attribute: string): HTMLElement | null {
 	while (node) {
 		if (node instanceof HTMLElement && node.hasAttribute(attribute)) {
 			return node;
@@ -1022,7 +1105,7 @@ export function getElementsByTagName(tag: string): HTMLElement[] {
 	return Array.prototype.slice.call(document.getElementsByTagName(tag), 0);
 }
 
-export function finalHandler<T extends Event>(fn: (event: T) => any): (event: T) => any {
+export function finalHandler<T extends DOMEvent>(fn: (event: T) => any): (event: T) => any {
 	return e => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -1030,13 +1113,57 @@ export function finalHandler<T extends Event>(fn: (event: T) => any): (event: T)
 	};
 }
 
-export function domContentLoaded(): TPromise<any> {
-	return new TPromise<any>((c, e) => {
+export function domContentLoaded(): Promise<any> {
+	return new Promise<any>(resolve => {
 		const readyState = document.readyState;
 		if (readyState === 'complete' || (document && document.body !== null)) {
-			window.setImmediate(c);
+			platform.setImmediate(resolve);
 		} else {
-			window.addEventListener('DOMContentLoaded', c, false);
+			window.addEventListener('DOMContentLoaded', resolve, false);
 		}
 	});
+}
+
+/**
+ * Find a value usable for a dom node size such that the likelihood that it would be
+ * displayed with constant screen pixels size is as high as possible.
+ *
+ * e.g. We would desire for the cursors to be 2px (CSS px) wide. Under a devicePixelRatio
+ * of 1.25, the cursor will be 2.5 screen pixels wide. Depending on how the dom node aligns/"snaps"
+ * with the screen pixels, it will sometimes be rendered with 2 screen pixels, and sometimes with 3 screen pixels.
+ */
+export function computeScreenAwareSize(cssPx: number): number {
+	const screenPx = window.devicePixelRatio * cssPx;
+	return Math.max(1, Math.floor(screenPx)) / window.devicePixelRatio;
+}
+
+/**
+ * See https://github.com/Microsoft/monaco-editor/issues/601
+ * To protect against malicious code in the linked site, particularly phishing attempts,
+ * the window.opener should be set to null to prevent the linked site from having access
+ * to change the location of the current page.
+ * See https://mathiasbynens.github.io/rel-noopener/
+ */
+export function windowOpenNoOpener(url: string): void {
+	if (platform.isNative || browser.isEdgeWebView) {
+		// In VSCode, window.open() always returns null...
+		// The same is true for a WebView (see https://github.com/Microsoft/monaco-editor/issues/628)
+		window.open(url);
+	} else {
+		let newTab = window.open();
+		if (newTab) {
+			(newTab as any).opener = null;
+			newTab.location.href = url;
+		}
+	}
+}
+
+export function animate(fn: () => void): IDisposable {
+	const step = () => {
+		fn();
+		stepDisposable = scheduleAtNextAnimationFrame(step);
+	};
+
+	let stepDisposable = scheduleAtNextAnimationFrame(step);
+	return toDisposable(() => stepDisposable.dispose());
 }

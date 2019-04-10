@@ -2,14 +2,11 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
-
 import * as assert from 'assert';
-import strings = require('vs/base/common/strings');
+import * as strings from 'vs/base/common/strings';
 
 suite('Strings', () => {
-	test('equalsIgnoreCase', function () {
-
+	test('equalsIgnoreCase', () => {
 		assert(strings.equalsIgnoreCase('', ''));
 		assert(!strings.equalsIgnoreCase('', '1'));
 		assert(!strings.equalsIgnoreCase('1', ''));
@@ -21,12 +18,45 @@ suite('Strings', () => {
 		assert(strings.equalsIgnoreCase('ÖL', 'Öl'));
 	});
 
-	test('compareIgnoreCase', function () {
+	test('beginsWithIgnoreCase', () => {
+		assert(strings.startsWithIgnoreCase('', ''));
+		assert(!strings.startsWithIgnoreCase('', '1'));
+		assert(strings.startsWithIgnoreCase('1', ''));
 
-		function assertCompareIgnoreCase(a: string, b: string): void {
+		assert(strings.startsWithIgnoreCase('a', 'a'));
+		assert(strings.startsWithIgnoreCase('abc', 'Abc'));
+		assert(strings.startsWithIgnoreCase('abc', 'ABC'));
+		assert(strings.startsWithIgnoreCase('Höhenmeter', 'HÖhenmeter'));
+		assert(strings.startsWithIgnoreCase('ÖL', 'Öl'));
+
+		assert(strings.startsWithIgnoreCase('alles klar', 'a'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'A'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'alles k'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'alles K'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'ALLES K'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'alles klar'));
+		assert(strings.startsWithIgnoreCase('alles klar', 'ALLES KLAR'));
+
+		assert(!strings.startsWithIgnoreCase('alles klar', ' ALLES K'));
+		assert(!strings.startsWithIgnoreCase('alles klar', 'ALLES K '));
+		assert(!strings.startsWithIgnoreCase('alles klar', 'öALLES K '));
+		assert(!strings.startsWithIgnoreCase('alles klar', ' '));
+		assert(!strings.startsWithIgnoreCase('alles klar', 'ö'));
+	});
+
+	test('compareIgnoreCase', () => {
+
+		function assertCompareIgnoreCase(a: string, b: string, recurse = true): void {
 			let actual = strings.compareIgnoreCase(a, b);
+			actual = actual > 0 ? 1 : actual < 0 ? -1 : actual;
+
 			let expected = strings.compare(a.toLowerCase(), b.toLowerCase());
+			expected = expected > 0 ? 1 : expected < 0 ? -1 : expected;
 			assert.equal(actual, expected, `${a} <> ${b}`);
+
+			if (recurse) {
+				assertCompareIgnoreCase(b, a, false);
+			}
 		}
 
 		assertCompareIgnoreCase('', '');
@@ -38,9 +68,20 @@ suite('Strings', () => {
 		assertCompareIgnoreCase('Code', 'code');
 		assertCompareIgnoreCase('Code', 'cöde');
 
+		assertCompareIgnoreCase('B', 'a');
+		assertCompareIgnoreCase('a', 'B');
+		assertCompareIgnoreCase('b', 'a');
+		assertCompareIgnoreCase('a', 'b');
+
+		assertCompareIgnoreCase('aa', 'ab');
+		assertCompareIgnoreCase('aa', 'aB');
+		assertCompareIgnoreCase('aa', 'aA');
+		assertCompareIgnoreCase('a', 'aa');
+		assertCompareIgnoreCase('ab', 'aA');
+		assertCompareIgnoreCase('O', '/');
 	});
 
-	test('format', function () {
+	test('format', () => {
 		assert.strictEqual(strings.format('Foo Bar'), 'Foo Bar');
 		assert.strictEqual(strings.format('Foo {0} Bar'), 'Foo {0} Bar');
 		assert.strictEqual(strings.format('Foo {0} Bar', 'yes'), 'Foo yes Bar');
@@ -51,37 +92,35 @@ suite('Strings', () => {
 		assert.strictEqual(strings.format('Foo {0} Bar. {1}', '(foo)', '.test'), 'Foo (foo) Bar. .test');
 	});
 
-	test('computeLineStarts', function () {
-		function assertLineStart(text: string, ...offsets: number[]): void {
-			const actual = strings.computeLineStarts(text);
-			assert.equal(actual.length, offsets.length);
-			if (actual.length !== offsets.length) {
-				return;
-			}
-			while (offsets.length > 0) {
-				assert.equal(actual.pop(), offsets.pop());
-			}
-		}
+	test('overlap', () => {
+		assert.equal(strings.overlap('foobar', 'arr, I am a priate'), 2);
+		assert.equal(strings.overlap('no', 'overlap'), 1);
+		assert.equal(strings.overlap('no', '0verlap'), 0);
+		assert.equal(strings.overlap('nothing', ''), 0);
+		assert.equal(strings.overlap('', 'nothing'), 0);
+		assert.equal(strings.overlap('full', 'full'), 4);
+		assert.equal(strings.overlap('full', 'fulloverlap'), 4);
+	});
+	test('lcut', () => {
+		assert.strictEqual(strings.lcut('foo bar', 0), '');
+		assert.strictEqual(strings.lcut('foo bar', 1), 'bar');
+		assert.strictEqual(strings.lcut('foo bar', 3), 'bar');
+		assert.strictEqual(strings.lcut('foo bar', 4), 'bar'); // Leading whitespace trimmed
+		assert.strictEqual(strings.lcut('foo bar', 5), 'foo bar');
+		assert.strictEqual(strings.lcut('test string 0.1.2.3', 3), '2.3');
 
-		assertLineStart('', 0);
-		assertLineStart('farboo', 0);
-		assertLineStart('far\nboo', 0, 4);
-		assertLineStart('far\rboo', 0, 4);
-		assertLineStart('far\r\nboo', 0, 5);
-		assertLineStart('far\n\rboo', 0, 4, 5);
-		assertLineStart('far\n \rboo', 0, 4, 6);
-		assertLineStart('far\nboo\nfar', 0, 4, 8);
+		assert.strictEqual(strings.lcut('', 10), '');
+		assert.strictEqual(strings.lcut('a', 10), 'a');
 	});
 
-
-	test('pad', function () {
+	test('pad', () => {
 		assert.strictEqual(strings.pad(1, 0), '1');
 		assert.strictEqual(strings.pad(1, 1), '1');
 		assert.strictEqual(strings.pad(1, 2), '01');
 		assert.strictEqual(strings.pad(0, 2), '00');
 	});
 
-	test('escape', function () {
+	test('escape', () => {
 		assert.strictEqual(strings.escape(''), '');
 		assert.strictEqual(strings.escape('foo'), 'foo');
 		assert.strictEqual(strings.escape('foo bar'), 'foo bar');
@@ -89,7 +128,7 @@ suite('Strings', () => {
 		assert.strictEqual(strings.escape('<foo>Hello</foo>'), '&lt;foo&gt;Hello&lt;/foo&gt;');
 	});
 
-	test('startsWith', function () {
+	test('startsWith', () => {
 		assert(strings.startsWith('foo', 'f'));
 		assert(strings.startsWith('foo', 'fo'));
 		assert(strings.startsWith('foo', 'foo'));
@@ -99,7 +138,7 @@ suite('Strings', () => {
 		assert(strings.startsWith('', ''));
 	});
 
-	test('endsWith', function () {
+	test('endsWith', () => {
 		assert(strings.endsWith('foo', 'o'));
 		assert(strings.endsWith('foo', 'oo'));
 		assert(strings.endsWith('foo', 'foo'));
@@ -111,7 +150,7 @@ suite('Strings', () => {
 		assert(strings.endsWith('/', '/'));
 	});
 
-	test('ltrim', function () {
+	test('ltrim', () => {
 		assert.strictEqual(strings.ltrim('foo', 'f'), 'oo');
 		assert.strictEqual(strings.ltrim('foo', 'o'), 'foo');
 		assert.strictEqual(strings.ltrim('http://www.test.de', 'http://'), 'www.test.de');
@@ -124,7 +163,7 @@ suite('Strings', () => {
 		assert.strictEqual(strings.ltrim('', '/'), '');
 	});
 
-	test('rtrim', function () {
+	test('rtrim', () => {
 		assert.strictEqual(strings.rtrim('foo', 'o'), 'f');
 		assert.strictEqual(strings.rtrim('foo', 'f'), 'foo');
 		assert.strictEqual(strings.rtrim('http://www.test.de', '.de'), 'http://www.test');
@@ -137,7 +176,7 @@ suite('Strings', () => {
 		assert.strictEqual(strings.rtrim('', '/'), '');
 	});
 
-	test('trim', function () {
+	test('trim', () => {
 		assert.strictEqual(strings.trim(' foo '), 'foo');
 		assert.strictEqual(strings.trim('  foo'), 'foo');
 		assert.strictEqual(strings.trim('bar  '), 'bar');
@@ -145,20 +184,13 @@ suite('Strings', () => {
 		assert.strictEqual(strings.trim('foo bar', 'bar'), 'foo ');
 	});
 
-	test('trimWhitespace', function () {
+	test('trimWhitespace', () => {
 		assert.strictEqual(' foo '.trim(), 'foo');
 		assert.strictEqual('	 foo	'.trim(), 'foo');
 		assert.strictEqual('  foo'.trim(), 'foo');
 		assert.strictEqual('bar  '.trim(), 'bar');
 		assert.strictEqual('   '.trim(), '');
 		assert.strictEqual(' 	  '.trim(), '');
-	});
-
-	test('appendWithLimit', function () {
-		assert.strictEqual(strings.appendWithLimit('ab', 'cd', 100), 'abcd');
-		assert.strictEqual(strings.appendWithLimit('ab', 'cd', 2), '...cd');
-		assert.strictEqual(strings.appendWithLimit('ab', 'cdefgh', 4), '...efgh');
-		assert.strictEqual(strings.appendWithLimit('abcdef', 'ghijk', 7), '...efghijk');
 	});
 
 	test('repeat', () => {
@@ -189,29 +221,23 @@ suite('Strings', () => {
 		assert.equal(strings.containsRTL('זוהי עובדה מבוססת שדעתו'), true);
 	});
 
-	// test('containsRTL speed', () => {
-	// 	var SIZE = 1000000;
-	// 	var REPEAT = 10;
-	// 	function generateASCIIStr(len:number): string {
-	// 		let r = '';
-	// 		for (var i = 0; i < len; i++) {
-	// 			var res = Math.floor(Math.random() * 256);
-	// 			r += String.fromCharCode(res);
-	// 		}
-	// 		return r;
-	// 	}
-	// 	function testContainsRTLSpeed(): number {
-	// 		var str = generateASCIIStr(SIZE);
-	// 		var start = Date.now();
-	// 		assert.equal(strings.containsRTL(str), false);
-	// 		return (Date.now() - start);
-	// 	}
-	// 	var allTime = 0;
-	// 	for (var i = 0; i < REPEAT; i++) {
-	// 		allTime += testContainsRTLSpeed();
-	// 	}
-	// 	console.log('TOOK: ' + (allTime)/10 + 'ms for size of ' + SIZE/1000000 + 'Mb');
-	// });
+	test('containsEmoji', () => {
+		assert.equal(strings.containsEmoji('a'), false);
+		assert.equal(strings.containsEmoji(''), false);
+		assert.equal(strings.containsEmoji(strings.UTF8_BOM_CHARACTER + 'a'), false);
+		assert.equal(strings.containsEmoji('hello world!'), false);
+		assert.equal(strings.containsEmoji('هناك حقيقة مثبتة منذ زمن طويل'), false);
+		assert.equal(strings.containsEmoji('זוהי עובדה מבוססת שדעתו'), false);
+
+		assert.equal(strings.containsEmoji('a📚📚b'), true);
+		assert.equal(strings.containsEmoji('1F600 # 😀 grinning face'), true);
+		assert.equal(strings.containsEmoji('1F47E # 👾 alien monster'), true);
+		assert.equal(strings.containsEmoji('1F467 1F3FD # 👧🏽 girl: medium skin tone'), true);
+		assert.equal(strings.containsEmoji('26EA # ⛪ church'), true);
+		assert.equal(strings.containsEmoji('231B # ⌛ hourglass'), true);
+		assert.equal(strings.containsEmoji('2702 # ✂ scissors'), true);
+		assert.equal(strings.containsEmoji('1F1F7 1F1F4  # 🇷🇴 Romania'), true);
+	});
 
 	test('isBasicASCII', () => {
 		function assertIsBasicASCII(str: string, expected: boolean): void {
@@ -236,5 +262,200 @@ suite('Strings', () => {
 		assertIsBasicASCII(String.fromCharCode(127), false);
 		assertIsBasicASCII('ü', false);
 		assertIsBasicASCII('a📚📚b', false);
+	});
+
+	test('createRegExp', () => {
+		// Empty
+		assert.throws(() => strings.createRegExp('', false));
+
+		// Escapes appropriately
+		assert.equal(strings.createRegExp('abc', false).source, 'abc');
+		assert.equal(strings.createRegExp('([^ ,.]*)', false).source, '\\(\\[\\^ ,\\.\\]\\*\\)');
+		assert.equal(strings.createRegExp('([^ ,.]*)', true).source, '([^ ,.]*)');
+
+		// Whole word
+		assert.equal(strings.createRegExp('abc', false, { wholeWord: true }).source, '\\babc\\b');
+		assert.equal(strings.createRegExp('abc', true, { wholeWord: true }).source, '\\babc\\b');
+		assert.equal(strings.createRegExp(' abc', true, { wholeWord: true }).source, ' abc\\b');
+		assert.equal(strings.createRegExp('abc ', true, { wholeWord: true }).source, '\\babc ');
+		assert.equal(strings.createRegExp(' abc ', true, { wholeWord: true }).source, ' abc ');
+
+		const regExpWithoutFlags = strings.createRegExp('abc', true);
+		assert(!regExpWithoutFlags.global);
+		assert(regExpWithoutFlags.ignoreCase);
+		assert(!regExpWithoutFlags.multiline);
+
+		const regExpWithFlags = strings.createRegExp('abc', true, { global: true, matchCase: true, multiline: true });
+		assert(regExpWithFlags.global);
+		assert(!regExpWithFlags.ignoreCase);
+		assert(regExpWithFlags.multiline);
+	});
+
+	test('regExpContainsBackreference', () => {
+		assert(strings.regExpContainsBackreference('foo \\5 bar'));
+		assert(strings.regExpContainsBackreference('\\2'));
+		assert(strings.regExpContainsBackreference('(\\d)(\\n)(\\1)'));
+		assert(strings.regExpContainsBackreference('(A).*?\\1'));
+		assert(strings.regExpContainsBackreference('\\\\\\1'));
+		assert(strings.regExpContainsBackreference('foo \\\\\\1'));
+
+		assert(!strings.regExpContainsBackreference(''));
+		assert(!strings.regExpContainsBackreference('\\\\1'));
+		assert(!strings.regExpContainsBackreference('foo \\\\1'));
+		assert(!strings.regExpContainsBackreference('(A).*?\\\\1'));
+		assert(!strings.regExpContainsBackreference('foo \\d1 bar'));
+		assert(!strings.regExpContainsBackreference('123'));
+	});
+
+	test('getLeadingWhitespace', () => {
+		assert.equal(strings.getLeadingWhitespace('  foo'), '  ');
+		assert.equal(strings.getLeadingWhitespace('  foo', 2), '');
+		assert.equal(strings.getLeadingWhitespace('  foo', 1, 1), '');
+		assert.equal(strings.getLeadingWhitespace('  foo', 0, 1), ' ');
+		assert.equal(strings.getLeadingWhitespace('  '), '  ');
+		assert.equal(strings.getLeadingWhitespace('  ', 1), ' ');
+		assert.equal(strings.getLeadingWhitespace('  ', 0, 1), ' ');
+		assert.equal(strings.getLeadingWhitespace('\t\tfunction foo(){', 0, 1), '\t');
+		assert.equal(strings.getLeadingWhitespace('\t\tfunction foo(){', 0, 2), '\t\t');
+	});
+
+	test('fuzzyContains', () => {
+		assert.ok(!strings.fuzzyContains((undefined)!, null!));
+		assert.ok(strings.fuzzyContains('hello world', 'h'));
+		assert.ok(!strings.fuzzyContains('hello world', 'q'));
+		assert.ok(strings.fuzzyContains('hello world', 'hw'));
+		assert.ok(strings.fuzzyContains('hello world', 'horl'));
+		assert.ok(strings.fuzzyContains('hello world', 'd'));
+		assert.ok(!strings.fuzzyContains('hello world', 'wh'));
+		assert.ok(!strings.fuzzyContains('d', 'dd'));
+	});
+
+	test('startsWithUTF8BOM', () => {
+		assert(strings.startsWithUTF8BOM(strings.UTF8_BOM_CHARACTER));
+		assert(strings.startsWithUTF8BOM(strings.UTF8_BOM_CHARACTER + 'a'));
+		assert(strings.startsWithUTF8BOM(strings.UTF8_BOM_CHARACTER + 'aaaaaaaaaa'));
+		assert(!strings.startsWithUTF8BOM(' ' + strings.UTF8_BOM_CHARACTER));
+		assert(!strings.startsWithUTF8BOM('foo'));
+		assert(!strings.startsWithUTF8BOM(''));
+	});
+
+	test('stripUTF8BOM', () => {
+		assert.equal(strings.stripUTF8BOM(strings.UTF8_BOM_CHARACTER), '');
+		assert.equal(strings.stripUTF8BOM(strings.UTF8_BOM_CHARACTER + 'foobar'), 'foobar');
+		assert.equal(strings.stripUTF8BOM('foobar' + strings.UTF8_BOM_CHARACTER), 'foobar' + strings.UTF8_BOM_CHARACTER);
+		assert.equal(strings.stripUTF8BOM('abc'), 'abc');
+		assert.equal(strings.stripUTF8BOM(''), '');
+	});
+
+	test('containsUppercaseCharacter', () => {
+		[
+			[null, false],
+			['', false],
+			['foo', false],
+			['föö', false],
+			['ناك', false],
+			['מבוססת', false],
+			['😀', false],
+			['(#@()*&%()@*#&09827340982374}{:">?></\'\\~`', false],
+
+			['Foo', true],
+			['FOO', true],
+			['FöÖ', true],
+			['FöÖ', true],
+			['\\Foo', true],
+		].forEach(([str, result]) => {
+			assert.equal(strings.containsUppercaseCharacter(<string>str), result, `Wrong result for ${str}`);
+		});
+	});
+
+	test('containsUppercaseCharacter (ignoreEscapedChars)', () => {
+		[
+			['\\Woo', false],
+			['f\\S\\S', false],
+			['foo', false],
+
+			['Foo', true],
+		].forEach(([str, result]) => {
+			assert.equal(strings.containsUppercaseCharacter(<string>str, true), result, `Wrong result for ${str}`);
+		});
+	});
+
+	test('uppercaseFirstLetter', () => {
+		[
+			['', ''],
+			['foo', 'Foo'],
+			['f', 'F'],
+			['123', '123'],
+			['.a', '.a'],
+		].forEach(([inStr, result]) => {
+			assert.equal(strings.uppercaseFirstLetter(inStr), result, `Wrong result for ${inStr}`);
+		});
+	});
+
+	test('getNLines', () => {
+		assert.equal(strings.getNLines('', 5), '');
+		assert.equal(strings.getNLines('foo', 5), 'foo');
+		assert.equal(strings.getNLines('foo\nbar', 5), 'foo\nbar');
+		assert.equal(strings.getNLines('foo\nbar', 2), 'foo\nbar');
+
+		assert.equal(strings.getNLines('foo\nbar', 1), 'foo');
+		assert.equal(strings.getNLines('foo\nbar'), 'foo');
+		assert.equal(strings.getNLines('foo\nbar\nsomething', 2), 'foo\nbar');
+		assert.equal(strings.getNLines('foo', 0), '');
+	});
+
+	test('removeAccents', function () {
+		assert.equal(strings.removeAccents('joào'), 'joao');
+		assert.equal(strings.removeAccents('joáo'), 'joao');
+		assert.equal(strings.removeAccents('joâo'), 'joao');
+		assert.equal(strings.removeAccents('joäo'), 'joao');
+		// assert.equal(strings.removeAccents('joæo'), 'joao'); // not an accent
+		assert.equal(strings.removeAccents('joão'), 'joao');
+		assert.equal(strings.removeAccents('joåo'), 'joao');
+		assert.equal(strings.removeAccents('joåo'), 'joao');
+		assert.equal(strings.removeAccents('joāo'), 'joao');
+
+		assert.equal(strings.removeAccents('fôo'), 'foo');
+		assert.equal(strings.removeAccents('föo'), 'foo');
+		assert.equal(strings.removeAccents('fòo'), 'foo');
+		assert.equal(strings.removeAccents('fóo'), 'foo');
+		// assert.equal(strings.removeAccents('fœo'), 'foo');
+		// assert.equal(strings.removeAccents('føo'), 'foo');
+		assert.equal(strings.removeAccents('fōo'), 'foo');
+		assert.equal(strings.removeAccents('fõo'), 'foo');
+
+		assert.equal(strings.removeAccents('andrè'), 'andre');
+		assert.equal(strings.removeAccents('andré'), 'andre');
+		assert.equal(strings.removeAccents('andrê'), 'andre');
+		assert.equal(strings.removeAccents('andrë'), 'andre');
+		assert.equal(strings.removeAccents('andrē'), 'andre');
+		assert.equal(strings.removeAccents('andrė'), 'andre');
+		assert.equal(strings.removeAccents('andrę'), 'andre');
+
+		assert.equal(strings.removeAccents('hvîc'), 'hvic');
+		assert.equal(strings.removeAccents('hvïc'), 'hvic');
+		assert.equal(strings.removeAccents('hvíc'), 'hvic');
+		assert.equal(strings.removeAccents('hvīc'), 'hvic');
+		assert.equal(strings.removeAccents('hvįc'), 'hvic');
+		assert.equal(strings.removeAccents('hvìc'), 'hvic');
+
+		assert.equal(strings.removeAccents('ûdo'), 'udo');
+		assert.equal(strings.removeAccents('üdo'), 'udo');
+		assert.equal(strings.removeAccents('ùdo'), 'udo');
+		assert.equal(strings.removeAccents('údo'), 'udo');
+		assert.equal(strings.removeAccents('ūdo'), 'udo');
+
+		assert.equal(strings.removeAccents('heÿ'), 'hey');
+
+		// assert.equal(strings.removeAccents('gruß'), 'grus');
+		assert.equal(strings.removeAccents('gruś'), 'grus');
+		assert.equal(strings.removeAccents('gruš'), 'grus');
+
+		assert.equal(strings.removeAccents('çool'), 'cool');
+		assert.equal(strings.removeAccents('ćool'), 'cool');
+		assert.equal(strings.removeAccents('čool'), 'cool');
+
+		assert.equal(strings.removeAccents('ñice'), 'nice');
+		assert.equal(strings.removeAccents('ńice'), 'nice');
 	});
 });

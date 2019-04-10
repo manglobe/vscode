@@ -2,14 +2,11 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
 import { EditorInput, ITextEditorModel } from 'vs/workbench/common/editor';
-import URI from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { IReference } from 'vs/base/common/lifecycle';
-import { telemetryURIDescriptor } from 'vs/platform/telemetry/common/telemetryUtils';
-import { ITextModelResolverService } from 'vs/editor/common/services/resolverService';
+import { ITextModelService } from 'vs/editor/common/services/resolverService';
 import { ResourceEditorModel } from 'vs/workbench/common/editor/resourceEditorModel';
 
 /**
@@ -18,19 +15,15 @@ import { ResourceEditorModel } from 'vs/workbench/common/editor/resourceEditorMo
  */
 export class ResourceEditorInput extends EditorInput {
 
-	static ID: string = 'workbench.editors.resourceEditorInput';
+	static readonly ID: string = 'workbench.editors.resourceEditorInput';
 
-	protected promise: TPromise<IReference<ResourceEditorModel>>;
-	protected resource: URI;
-
-	private name: string;
-	private description: string;
+	private modelReference: Promise<IReference<ITextEditorModel>> | null;
 
 	constructor(
-		name: string,
-		description: string,
-		resource: URI,
-		@ITextModelResolverService private textModelResolverService: ITextModelResolverService
+		private name: string,
+		private description: string | null,
+		private readonly resource: URI,
+		@ITextModelService private readonly textModelResolverService: ITextModelService
 	) {
 		super();
 
@@ -58,7 +51,7 @@ export class ResourceEditorInput extends EditorInput {
 		}
 	}
 
-	getDescription(): string {
+	getDescription(): string | null {
 		return this.description;
 	}
 
@@ -69,34 +62,26 @@ export class ResourceEditorInput extends EditorInput {
 		}
 	}
 
-	getTelemetryDescriptor(): { [key: string]: any; } {
-		const descriptor = super.getTelemetryDescriptor();
-		descriptor['resource'] = telemetryURIDescriptor(this.resource);
-		return descriptor;
-	}
-
-	resolve(refresh?: boolean): TPromise<ITextEditorModel> {
-		if (!this.promise) {
-			this.promise = this.textModelResolverService.createModelReference(this.resource);
+	resolve(): Promise<ITextEditorModel> {
+		if (!this.modelReference) {
+			this.modelReference = this.textModelResolverService.createModelReference(this.resource);
 		}
 
-		return this.promise.then(ref => {
+		return this.modelReference.then(ref => {
 			const model = ref.object;
 
 			if (!(model instanceof ResourceEditorModel)) {
 				ref.dispose();
-				this.promise = null;
-				return TPromise.wrapError(`Unexpected model for ResourceInput: ${this.resource}`); // TODO@Ben eventually also files should be supported, but we guard due to the dangerous dispose of the model in dispose()
-			}
+				this.modelReference = null;
 
-			// TODO@Joao this should never happen
-			model.onDispose(() => this.dispose());
+				return Promise.reject(new Error(`Unexpected model for ResourceInput: ${this.resource}`));
+			}
 
 			return model;
 		});
 	}
 
-	matches(otherInput: any): boolean {
+	matches(otherInput: unknown): boolean {
 		if (super.matches(otherInput) === true) {
 			return true;
 		}
@@ -112,9 +97,9 @@ export class ResourceEditorInput extends EditorInput {
 	}
 
 	dispose(): void {
-		if (this.promise) {
-			this.promise.done(ref => ref.dispose());
-			this.promise = null;
+		if (this.modelReference) {
+			this.modelReference.then(ref => ref.dispose());
+			this.modelReference = null;
 		}
 
 		super.dispose();

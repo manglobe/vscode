@@ -2,8 +2,6 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
-
 import * as assert from 'assert';
 import { LinesLayout } from 'vs/editor/common/viewLayout/linesLayout';
 
@@ -12,7 +10,7 @@ suite('Editor ViewLayout - LinesLayout', () => {
 	test('LinesLayout 1', () => {
 
 		// Start off with 10 lines
-		var linesLayout = new LinesLayout(10, 10);
+		let linesLayout = new LinesLayout(10, 10);
 
 		// lines: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 		// whitespace: -
@@ -41,7 +39,7 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		assert.equal(linesLayout.getLineNumberAtOrAfterVerticalOffset(29), 3);
 
 		// Add whitespace of height 5px after 2nd line
-		linesLayout.insertWhitespace(2, 0, 5);
+		linesLayout.insertWhitespace(2, 0, 5, 0);
 		// lines: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 		// whitespace: a(2,5)
 		assert.equal(linesLayout.getLinesTotalHeight(), 105);
@@ -65,8 +63,8 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		assert.equal(linesLayout.getLineNumberAtOrAfterVerticalOffset(105), 10);
 
 		// Add two more whitespaces of height 5px
-		linesLayout.insertWhitespace(3, 0, 5);
-		linesLayout.insertWhitespace(4, 0, 5);
+		linesLayout.insertWhitespace(3, 0, 5, 0);
+		linesLayout.insertWhitespace(4, 0, 5, 0);
 		// lines: [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 		// whitespace: a(2,5), b(3, 5), c(4, 5)
 		assert.equal(linesLayout.getLinesTotalHeight(), 115);
@@ -121,8 +119,8 @@ suite('Editor ViewLayout - LinesLayout', () => {
 	test('LinesLayout 2', () => {
 
 		// Start off with 10 lines and one whitespace after line 2, of height 5
-		var linesLayout = new LinesLayout(10, 1);
-		var a = linesLayout.insertWhitespace(2, 0, 5);
+		let linesLayout = new LinesLayout(10, 1);
+		let a = linesLayout.insertWhitespace(2, 0, 5, 0);
 
 		// 10 lines
 		// whitespace: - a(2,5)
@@ -173,7 +171,7 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		// Pretend that lines 5 and 6 were deleted
 		// 8 lines
 		// whitespace: - a(4,10)
-		linesLayout.onModelLinesDeleted(5, 6);
+		linesLayout.onLinesDeleted(5, 6);
 		assert.equal(linesLayout.getLinesTotalHeight(), 18);
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(1), 0);
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(2), 1);
@@ -187,7 +185,7 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		// Insert two lines at the beginning
 		// 10 lines
 		// whitespace: - a(6,10)
-		linesLayout.onModelLinesInserted(1, 2);
+		linesLayout.onLinesInserted(1, 2);
 		assert.equal(linesLayout.getLinesTotalHeight(), 20);
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(1), 0);
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(2), 1);
@@ -217,8 +215,8 @@ suite('Editor ViewLayout - LinesLayout', () => {
 	});
 
 	test('LinesLayout getLineNumberAtOrAfterVerticalOffset', () => {
-		var linesLayout = new LinesLayout(10, 1);
-		linesLayout.insertWhitespace(6, 0, 10);
+		let linesLayout = new LinesLayout(10, 1);
+		linesLayout.insertWhitespace(6, 0, 10, 0);
 
 		// 10 lines
 		// whitespace: - a(6,10)
@@ -266,8 +264,8 @@ suite('Editor ViewLayout - LinesLayout', () => {
 	});
 
 	test('LinesLayout getCenteredLineInViewport', () => {
-		var linesLayout = new LinesLayout(10, 1);
-		linesLayout.insertWhitespace(6, 0, 10);
+		let linesLayout = new LinesLayout(10, 1);
+		linesLayout.insertWhitespace(6, 0, 10, 0);
 
 		// 10 lines
 		// whitespace: - a(6,10)
@@ -349,8 +347,8 @@ suite('Editor ViewLayout - LinesLayout', () => {
 	});
 
 	test('LinesLayout getLinesViewportData 1', () => {
-		var linesLayout = new LinesLayout(10, 10);
-		linesLayout.insertWhitespace(6, 0, 100);
+		let linesLayout = new LinesLayout(10, 10);
+		linesLayout.insertWhitespace(6, 0, 100, 0);
 
 		// 10 lines
 		// whitespace: - a(6,100)
@@ -367,111 +365,125 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(10), 190);
 
 		// viewport 0->50
-		var viewportData = linesLayout.getLinesViewportData(0, 50);
+		let viewportData = linesLayout.getLinesViewportData(0, 50);
 		assert.equal(viewportData.startLineNumber, 1);
 		assert.equal(viewportData.endLineNumber, 5);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 1);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 5);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [0, 10, 20, 30, 40]);
-		assert.equal(viewportData.visibleRangesDeltaTop, 0);
 
 		// viewport 1->51
 		viewportData = linesLayout.getLinesViewportData(1, 51);
 		assert.equal(viewportData.startLineNumber, 1);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 2);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 5);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [0, 10, 20, 30, 40, 50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -1);
 
 		// viewport 5->55
 		viewportData = linesLayout.getLinesViewportData(5, 55);
 		assert.equal(viewportData.startLineNumber, 1);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 2);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 5);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [0, 10, 20, 30, 40, 50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -5);
 
 		// viewport 10->60
 		viewportData = linesLayout.getLinesViewportData(10, 60);
 		assert.equal(viewportData.startLineNumber, 2);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 2);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 6);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [10, 20, 30, 40, 50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -10);
 
 		// viewport 50->100
 		viewportData = linesLayout.getLinesViewportData(50, 100);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 6);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 
 		// viewport 60->110
 		viewportData = linesLayout.getLinesViewportData(60, 110);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -60);
 
 		// viewport 65->115
 		viewportData = linesLayout.getLinesViewportData(65, 115);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -65);
 
 		// viewport 50->159
 		viewportData = linesLayout.getLinesViewportData(50, 159);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 6);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 
 		// viewport 50->160
 		viewportData = linesLayout.getLinesViewportData(50, 160);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 6);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 
 		// viewport 51->161
 		viewportData = linesLayout.getLinesViewportData(51, 161);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50, 160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -51);
 
 
 		// viewport 150->169
 		viewportData = linesLayout.getLinesViewportData(150, 169);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -150);
 
 		// viewport 159->169
 		viewportData = linesLayout.getLinesViewportData(159, 169);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -159);
 
 		// viewport 160->169
 		viewportData = linesLayout.getLinesViewportData(160, 169);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -160);
 
 
 		// viewport 160->1000
 		viewportData = linesLayout.getLinesViewportData(160, 1000);
 		assert.equal(viewportData.startLineNumber, 7);
 		assert.equal(viewportData.endLineNumber, 10);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 10);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [160, 170, 180, 190]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -160);
 	});
 
 
 	test('LinesLayout getLinesViewportData 2 & getWhitespaceViewportData', () => {
-		var linesLayout = new LinesLayout(10, 10);
-		var a = linesLayout.insertWhitespace(6, 0, 100);
-		var b = linesLayout.insertWhitespace(7, 0, 50);
+		let linesLayout = new LinesLayout(10, 10);
+		let a = linesLayout.insertWhitespace(6, 0, 100, 0);
+		let b = linesLayout.insertWhitespace(7, 0, 50, 0);
 
 		// 10 lines
 		// whitespace: - a(6,100), b(7, 50)
@@ -488,12 +500,13 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		assert.equal(linesLayout.getVerticalOffsetForLineNumber(10), 240);
 
 		// viewport 50->160
-		var viewportData = linesLayout.getLinesViewportData(50, 160);
+		let viewportData = linesLayout.getLinesViewportData(50, 160);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 6);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
-		var whitespaceData = linesLayout.getWhitespaceViewportData(50, 160);
+		let whitespaceData = linesLayout.getWhitespaceViewportData(50, 160);
 		assert.deepEqual(whitespaceData, [{
 			id: a,
 			afterLineNumber: 6,
@@ -505,8 +518,9 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		viewportData = linesLayout.getLinesViewportData(50, 219);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50, 160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 		whitespaceData = linesLayout.getWhitespaceViewportData(50, 219);
 		assert.deepEqual(whitespaceData, [{
 			id: a,
@@ -524,36 +538,38 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		viewportData = linesLayout.getLinesViewportData(50, 220);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 7);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 7);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50, 160]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 
 		// viewport 50->250
 		viewportData = linesLayout.getLinesViewportData(50, 250);
 		assert.equal(viewportData.startLineNumber, 6);
 		assert.equal(viewportData.endLineNumber, 10);
+		assert.equal(viewportData.completelyVisibleStartLineNumber, 6);
+		assert.equal(viewportData.completelyVisibleEndLineNumber, 10);
 		assert.deepEqual(viewportData.relativeVerticalOffset, [50, 160, 220, 230, 240]);
-		assert.equal(viewportData.visibleRangesDeltaTop, -50);
 	});
 
 	test('LinesLayout getWhitespaceAtVerticalOffset', () => {
-		var linesLayout = new LinesLayout(10, 10);
-		var a = linesLayout.insertWhitespace(6, 0, 100);
-		var b = linesLayout.insertWhitespace(7, 0, 50);
+		let linesLayout = new LinesLayout(10, 10);
+		let a = linesLayout.insertWhitespace(6, 0, 100, 0);
+		let b = linesLayout.insertWhitespace(7, 0, 50, 0);
 
-		var whitespace = linesLayout.getWhitespaceAtVerticalOffset(0);
+		let whitespace = linesLayout.getWhitespaceAtVerticalOffset(0);
 		assert.equal(whitespace, null);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(59);
 		assert.equal(whitespace, null);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(60);
-		assert.equal(whitespace.id, a);
+		assert.equal(whitespace!.id, a);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(61);
-		assert.equal(whitespace.id, a);
+		assert.equal(whitespace!.id, a);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(159);
-		assert.equal(whitespace.id, a);
+		assert.equal(whitespace!.id, a);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(160);
 		assert.equal(whitespace, null);
@@ -565,13 +581,13 @@ suite('Editor ViewLayout - LinesLayout', () => {
 		assert.equal(whitespace, null);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(170);
-		assert.equal(whitespace.id, b);
+		assert.equal(whitespace!.id, b);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(171);
-		assert.equal(whitespace.id, b);
+		assert.equal(whitespace!.id, b);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(219);
-		assert.equal(whitespace.id, b);
+		assert.equal(whitespace!.id, b);
 
 		whitespace = linesLayout.getWhitespaceAtVerticalOffset(220);
 		assert.equal(whitespace, null);

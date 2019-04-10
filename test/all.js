@@ -49,9 +49,10 @@ function main() {
 		nodeMain: __filename,
 		baseUrl: path.join(path.dirname(__dirname), 'src'),
 		paths: {
-			'vs': `../${ out }/vs`,
-			'lib': `../${ out }/lib`,
-			'bootstrap': `../${ out }/bootstrap`
+			'vs/css': '../test/css.mock',
+			'vs': `../${out}/vs`,
+			'lib': `../${out}/lib`,
+			'bootstrap-fork': `../${out}/bootstrap-fork`
 		},
 		catchError: true
 	};
@@ -78,10 +79,10 @@ function main() {
 
 			if (argv.forceLoad) {
 				var allFiles = glob.sync(out + '/vs/**/*.js');
-				allFiles = allFiles.map(function(source) {
+				allFiles = allFiles.map(function (source) {
 					return path.join(__dirname, '..', source);
 				});
-				allFiles = allFiles.filter(function(source) {
+				allFiles = allFiles.filter(function (source) {
 					if (seenSources[source]) {
 						return false;
 					}
@@ -93,7 +94,7 @@ function main() {
 					}
 					return true;
 				});
-				allFiles.forEach(function(source, index) {
+				allFiles.forEach(function (source, index) {
 					var contents = fs.readFileSync(source).toString();
 					contents = instrumenter.instrumentSync(contents, source);
 					var stopAt = contents.indexOf('}\n__cov');
@@ -105,18 +106,18 @@ function main() {
 				});
 			}
 
-			let remapIgnores = /\b((winjs\.base)|(marked)|(raw\.marked)|(nls)|(css))\.js$/;
+			let remapIgnores = /\b((marked)|(raw\.marked)|(nls)|(css))\.js$/;
 
 			var remappedCoverage = i_remap(global.__coverage__, { exclude: remapIgnores }).getFinalCoverage();
 
 			// The remapped coverage comes out with broken paths
-			var toUpperDriveLetter = function(str) {
+			var toUpperDriveLetter = function (str) {
 				if (/^[a-z]:/.test(str)) {
 					return str.charAt(0).toUpperCase() + str.substr(1);
 				}
 				return str;
 			};
-			var toLowerDriveLetter = function(str) {
+			var toLowerDriveLetter = function (str) {
 				if (/^[A-Z]:/.test(str)) {
 					return str.charAt(0).toLowerCase() + str.substr(1);
 				}
@@ -124,7 +125,7 @@ function main() {
 			};
 
 			var REPO_PATH = toUpperDriveLetter(path.join(__dirname, '..'));
-			var fixPath = function(brokenPath) {
+			var fixPath = function (brokenPath) {
 				var startIndex = brokenPath.indexOf(REPO_PATH);
 				if (startIndex === -1) {
 					return toLowerDriveLetter(brokenPath);
@@ -144,7 +145,7 @@ function main() {
 
 			var coveragePath = path.join(path.dirname(__dirname), '.build', 'coverage');
 			var reportTypes = [];
-			if (argv.run) {
+			if (argv.run || argv.runGlob) {
 				// single file running
 				coveragePath += '-single';
 				reportTypes = ['lcovonly'];
@@ -153,7 +154,7 @@ function main() {
 			}
 			var reporter = new istanbul.Reporter(null, coveragePath);
 			reporter.addAll(reportTypes);
-			reporter.write(collector, true, function () {});
+			reporter.write(collector, true, function () { });
 		});
 	}
 
@@ -178,21 +179,38 @@ function main() {
 
 	var loadFunc = null;
 
-	if (argv.run) {
+	if (argv.runGlob) {
+		loadFunc = cb => {
+			const doRun = tests => {
+				const modulesToLoad = tests.map(test => {
+					if (path.isAbsolute(test)) {
+						test = path.relative(src, path.resolve(test));
+					}
+
+					return test.replace(/(\.js)|(\.d\.ts)|(\.js\.map)$/, '');
+				});
+				define(modulesToLoad, () => cb(null), cb);
+			};
+
+			glob(argv.runGlob, { cwd: src }, function (err, files) { doRun(files); });
+		};
+	} else if (argv.run) {
 		var tests = (typeof argv.run === 'string') ? [argv.run] : argv.run;
-		var modulesToLoad = tests.map(function(test) {
-			return path.relative(src, path.resolve(test)).replace(/(\.js)|(\.d\.ts)|(\.js\.map)$/, '');
+		var modulesToLoad = tests.map(function (test) {
+			test = test.replace(/^src/, 'out');
+			test = test.replace(/\.ts$/, '.js');
+			return path.relative(src, path.resolve(test)).replace(/(\.js)|(\.js\.map)$/, '').replace(/\\/g, '/');
 		});
-		loadFunc = function(cb) {
-			define(modulesToLoad, function () { cb(null); }, cb);
+		loadFunc = cb => {
+			define(modulesToLoad, () => cb(null), cb);
 		};
 	} else if (argv['only-monaco-editor']) {
-		loadFunc = function(cb) {
+		loadFunc = function (cb) {
 			glob(TEST_GLOB, { cwd: src }, function (err, files) {
 				var modulesToLoad = files.map(function (file) {
 					return file.replace(/\.js$/, '');
 				});
-				modulesToLoad = modulesToLoad.filter(function(module) {
+				modulesToLoad = modulesToLoad.filter(function (module) {
 					if (/^vs\/workbench\//.test(module)) {
 						return false;
 					}
@@ -209,7 +227,7 @@ function main() {
 			});
 		};
 	} else {
-		loadFunc = function(cb) {
+		loadFunc = function (cb) {
 			glob(TEST_GLOB, { cwd: src }, function (err, files) {
 				var modulesToLoad = files.map(function (file) {
 					return file.replace(/\.js$/, '');
@@ -219,7 +237,7 @@ function main() {
 		};
 	}
 
-	loadFunc(function(err) {
+	loadFunc(function (err) {
 		if (err) {
 			console.error(err);
 			return process.exit(1);
@@ -227,7 +245,7 @@ function main() {
 
 		process.stderr.write = write;
 
-		if (!argv.run) {
+		if (!argv.run && !argv.runGlob) {
 			// set up last test
 			suite('Loader', function () {
 				test('should not explode while loading', function () {
@@ -252,13 +270,10 @@ function main() {
 		});
 
 		// replace the default unexpected error handler to be useful during tests
-		loader(['vs/base/common/errors'], function(errors) {
+		loader(['vs/base/common/errors'], function (errors) {
 			errors.setUnexpectedErrorHandler(function (err) {
-				try {
-					throw new Error('oops');
-				} catch (e) {
-					unexpectedErrors.push((err && err.message ? err.message : err) + '\n' + e.stack);
-				}
+				let stack = (err && err.stack) || (new Error().stack);
+				unexpectedErrors.push((err && err.message ? err.message : err) + '\n' + stack);
 			});
 
 			// fire up mocha

@@ -2,30 +2,98 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
+import { CharCode } from 'vs/base/common/charCode';
 import * as strings from 'vs/base/common/strings';
-import { IState, ITokenizationSupport, TokenizationRegistry, LanguageId } from 'vs/editor/common/modes';
+import { IViewLineTokens, LineTokens } from 'vs/editor/common/core/lineTokens';
+import { TokenizationResult2 } from 'vs/editor/common/core/token';
+import { IState, LanguageId } from 'vs/editor/common/modes';
 import { NULL_STATE, nullTokenize2 } from 'vs/editor/common/modes/nullMode';
-import { LineTokens } from 'vs/editor/common/core/lineTokens';
 
-export function tokenizeToString(text: string, languageId: string): string {
-	return _tokenizeToString(text, _getSafeTokenizationSupport(languageId));
+export interface IReducedTokenizationSupport {
+	getInitialState(): IState;
+	tokenize2(line: string, state: IState, offsetDelta: number): TokenizationResult2;
 }
 
-function _getSafeTokenizationSupport(languageId: string): ITokenizationSupport {
-	let tokenizationSupport = TokenizationRegistry.get(languageId);
-	if (tokenizationSupport) {
-		return tokenizationSupport;
+const fallback: IReducedTokenizationSupport = {
+	getInitialState: () => NULL_STATE,
+	tokenize2: (buffer: string, state: IState, deltaOffset: number) => nullTokenize2(LanguageId.Null, buffer, state, deltaOffset)
+};
+
+export function tokenizeToString(text: string, tokenizationSupport: IReducedTokenizationSupport = fallback): string {
+	return _tokenizeToString(text, tokenizationSupport || fallback);
+}
+
+export function tokenizeLineToHTML(text: string, viewLineTokens: IViewLineTokens, colorMap: string[], startOffset: number, endOffset: number, tabSize: number): string {
+	let result = `<div>`;
+	let charIndex = startOffset;
+	let tabsCharDelta = 0;
+
+	for (let tokenIndex = 0, tokenCount = viewLineTokens.getCount(); tokenIndex < tokenCount; tokenIndex++) {
+		const tokenEndIndex = viewLineTokens.getEndOffset(tokenIndex);
+
+		if (tokenEndIndex <= startOffset) {
+			continue;
+		}
+
+		let partContent = '';
+
+		for (; charIndex < tokenEndIndex && charIndex < endOffset; charIndex++) {
+			const charCode = text.charCodeAt(charIndex);
+
+			switch (charCode) {
+				case CharCode.Tab:
+					let insertSpacesCount = tabSize - (charIndex + tabsCharDelta) % tabSize;
+					tabsCharDelta += insertSpacesCount - 1;
+					while (insertSpacesCount > 0) {
+						partContent += '&nbsp;';
+						insertSpacesCount--;
+					}
+					break;
+
+				case CharCode.LessThan:
+					partContent += '&lt;';
+					break;
+
+				case CharCode.GreaterThan:
+					partContent += '&gt;';
+					break;
+
+				case CharCode.Ampersand:
+					partContent += '&amp;';
+					break;
+
+				case CharCode.Null:
+					partContent += '&#00;';
+					break;
+
+				case CharCode.UTF8_BOM:
+				case CharCode.LINE_SEPARATOR_2028:
+					partContent += '\ufffd';
+					break;
+
+				case CharCode.CarriageReturn:
+					// zero width space, because carriage return would introduce a line break
+					partContent += '&#8203';
+					break;
+
+				default:
+					partContent += String.fromCharCode(charCode);
+			}
+		}
+
+		result += `<span style="${viewLineTokens.getInlineStyle(tokenIndex, colorMap)}">${partContent}</span>`;
+
+		if (tokenEndIndex > endOffset || charIndex >= endOffset) {
+			break;
+		}
 	}
-	return {
-		getInitialState: () => NULL_STATE,
-		tokenize: undefined,
-		tokenize2: (buffer: string, state: IState, deltaOffset: number) => nullTokenize2(LanguageId.Null, buffer, state, deltaOffset)
-	};
+
+	result += `</div>`;
+	return result;
 }
 
-function _tokenizeToString(text: string, tokenizationSupport: ITokenizationSupport): string {
+function _tokenizeToString(text: string, tokenizationSupport: IReducedTokenizationSupport): string {
 	let result = `<div class="monaco-tokenized-source">`;
 	let lines = text.split(/\r\n|\r|\n/);
 	let currentState = tokenizationSupport.getInitialState();
@@ -37,14 +105,16 @@ function _tokenizeToString(text: string, tokenizationSupport: ITokenizationSuppo
 		}
 
 		let tokenizationResult = tokenizationSupport.tokenize2(line, currentState, 0);
-		let lineTokens = new LineTokens(null, tokenizationResult.tokens, line);
+		LineTokens.convertToEndOffset(tokenizationResult.tokens, line.length);
+		let lineTokens = new LineTokens(tokenizationResult.tokens, line);
 		let viewLineTokens = lineTokens.inflate();
 
 		let startOffset = 0;
-		for (let j = 0, lenJ = viewLineTokens.length; j < lenJ; j++) {
-			const viewLineToken = viewLineTokens[j];
-			result += `<span class="${viewLineToken.type}">${strings.escape(line.substring(startOffset, viewLineToken.endIndex))}</span>`;
-			startOffset = viewLineToken.endIndex;
+		for (let j = 0, lenJ = viewLineTokens.getCount(); j < lenJ; j++) {
+			const type = viewLineTokens.getClassName(j);
+			const endIndex = viewLineTokens.getEndOffset(j);
+			result += `<span class="${type}">${strings.escape(line.substring(startOffset, endIndex))}</span>`;
+			startOffset = endIndex;
 		}
 
 		currentState = tokenizationResult.endState;

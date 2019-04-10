@@ -2,13 +2,13 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import * as assert from 'assert';
-import { TokenizationRegistry, IState, LanguageIdentifier, ColorId, MetadataConsts } from 'vs/editor/common/modes';
-import { tokenizeToString } from 'vs/editor/common/modes/textToHtmlTokenizer';
-import { MockMode } from 'vs/editor/test/common/mocks/mockMode';
 import { TokenizationResult2 } from 'vs/editor/common/core/token';
+import { ColorId, FontStyle, IState, LanguageIdentifier, MetadataConsts, TokenizationRegistry } from 'vs/editor/common/modes';
+import { tokenizeLineToHTML, tokenizeToString } from 'vs/editor/common/modes/textToHtmlTokenizer';
+import { ViewLineToken, ViewLineTokens } from 'vs/editor/test/common/core/viewLineToken';
+import { MockMode } from 'vs/editor/test/common/mocks/mockMode';
 
 suite('Editor Modes - textToHtmlTokenizer', () => {
 	function toStr(pieces: { className: string; text: string }[]): string {
@@ -18,8 +18,9 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 	test('TextToHtmlTokenizer 1', () => {
 		let mode = new Mode();
+		let support = TokenizationRegistry.get(mode.getId())!;
 
-		let actual = tokenizeToString('.abc..def...gh', mode.getId());
+		let actual = tokenizeToString('.abc..def...gh', support);
 		let expected = [
 			{ className: 'mtk7', text: '.' },
 			{ className: 'mtk9', text: 'abc' },
@@ -37,8 +38,9 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 
 	test('TextToHtmlTokenizer 2', () => {
 		let mode = new Mode();
+		let support = TokenizationRegistry.get(mode.getId())!;
 
-		let actual = tokenizeToString('.abc..def...gh\n.abc..def...gh', mode.getId());
+		let actual = tokenizeToString('.abc..def...gh\n.abc..def...gh', support);
 		let expected1 = [
 			{ className: 'mtk7', text: '.' },
 			{ className: 'mtk9', text: 'abc' },
@@ -64,17 +66,145 @@ suite('Editor Modes - textToHtmlTokenizer', () => {
 		mode.dispose();
 	});
 
+	test('tokenizeLineToHTML', () => {
+		const text = 'Ciao hello world!';
+		const lineTokens = new ViewLineTokens([
+			new ViewLineToken(
+				4,
+				(
+					(3 << MetadataConsts.FOREGROUND_OFFSET)
+					| ((FontStyle.Bold | FontStyle.Italic) << MetadataConsts.FONT_STYLE_OFFSET)
+				) >>> 0
+			),
+			new ViewLineToken(
+				5,
+				(
+					(1 << MetadataConsts.FOREGROUND_OFFSET)
+				) >>> 0
+			),
+			new ViewLineToken(
+				10,
+				(
+					(4 << MetadataConsts.FOREGROUND_OFFSET)
+				) >>> 0
+			),
+			new ViewLineToken(
+				11,
+				(
+					(1 << MetadataConsts.FOREGROUND_OFFSET)
+				) >>> 0
+			),
+			new ViewLineToken(
+				17,
+				(
+					(5 << MetadataConsts.FOREGROUND_OFFSET)
+					| ((FontStyle.Underline) << MetadataConsts.FONT_STYLE_OFFSET)
+				) >>> 0
+			)
+		]);
+		const colorMap = [null!, '#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff'];
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 0, 17, 4),
+			[
+				'<div>',
+				'<span style="color: #ff0000;font-style: italic;font-weight: bold;">Ciao</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #0000ff;text-decoration: underline;">world!</span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 0, 12, 4),
+			[
+				'<div>',
+				'<span style="color: #ff0000;font-style: italic;font-weight: bold;">Ciao</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #0000ff;text-decoration: underline;">w</span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 0, 11, 4),
+			[
+				'<div>',
+				'<span style="color: #ff0000;font-style: italic;font-weight: bold;">Ciao</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 1, 11, 4),
+			[
+				'<div>',
+				'<span style="color: #ff0000;font-style: italic;font-weight: bold;">iao</span>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 4, 11, 4),
+			[
+				'<div>',
+				'<span style="color: #000000;"> </span>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 5, 11, 4),
+			[
+				'<div>',
+				'<span style="color: #00ff00;">hello</span>',
+				'<span style="color: #000000;"> </span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 5, 10, 4),
+			[
+				'<div>',
+				'<span style="color: #00ff00;">hello</span>',
+				'</div>'
+			].join('')
+		);
+
+		assert.equal(
+			tokenizeLineToHTML(text, lineTokens, colorMap, 6, 9, 4),
+			[
+				'<div>',
+				'<span style="color: #00ff00;">ell</span>',
+				'</div>'
+			].join('')
+		);
+	});
+
 });
 
 class Mode extends MockMode {
 
-	private static _id = new LanguageIdentifier('textToHtmlTokenizerMode', 3);
+	private static readonly _id = new LanguageIdentifier('textToHtmlTokenizerMode', 3);
 
 	constructor() {
 		super(Mode._id);
 		this._register(TokenizationRegistry.register(this.getId(), {
-			getInitialState: (): IState => null,
-			tokenize: undefined,
+			getInitialState: (): IState => null!,
+			tokenize: undefined!,
 			tokenize2: (line: string, state: IState): TokenizationResult2 => {
 				let tokensArr: number[] = [];
 				let prevColor: ColorId = -1;
@@ -93,7 +223,7 @@ class Mode extends MockMode {
 				for (let i = 0; i < tokens.length; i++) {
 					tokens[i] = tokensArr[i];
 				}
-				return new TokenizationResult2(tokens, null);
+				return new TokenizationResult2(tokens, null!);
 			}
 		}));
 	}

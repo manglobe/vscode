@@ -3,13 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as getmac from 'getmac';
-import * as crypto from 'crypto';
-import { TPromise } from 'vs/base/common/winjs.base';
 import * as errors from 'vs/base/common/errors';
 import * as uuid from 'vs/base/common/uuid';
 import { networkInterfaces } from 'os';
-import { TrieMap } from 'vs/base/common/map';
+import { TernarySearchTree } from 'vs/base/common/map';
 
 // http://www.techrepublic.com/blog/data-center/mac-address-scorecard-for-common-virtual-machine-platforms/
 // VMware ESX 3, Server, Workstation, Player	00-50-56, 00-0C-29, 00-05-69
@@ -23,20 +20,32 @@ import { TrieMap } from 'vs/base/common/map';
 // Sun xVM VirtualBox	08-00-27
 export const virtualMachineHint: { value(): number } = new class {
 
-	private _virtualMachineOUIs: TrieMap<boolean>;
-	private _value: number;
+	private _virtualMachineOUIs?: TernarySearchTree<boolean>;
+	private _value?: number;
 
 	private _isVirtualMachineMacAdress(mac: string): boolean {
 		if (!this._virtualMachineOUIs) {
-			this._virtualMachineOUIs = new TrieMap<boolean>(s => s.split(/[-:]/));
-			// this._virtualMachineOUIs.insert('00-00-00', true);
-			this._virtualMachineOUIs.insert('00-50-56', true);
-			this._virtualMachineOUIs.insert('00-0C-29', true);
-			this._virtualMachineOUIs.insert('00-05-69', true);
-			this._virtualMachineOUIs.insert('00-03-FF', true);
-			this._virtualMachineOUIs.insert('00-1C-42', true);
+			this._virtualMachineOUIs = TernarySearchTree.forStrings<boolean>();
+
+			// dash-separated
+			this._virtualMachineOUIs.set('00-50-56', true);
+			this._virtualMachineOUIs.set('00-0C-29', true);
+			this._virtualMachineOUIs.set('00-05-69', true);
+			this._virtualMachineOUIs.set('00-03-FF', true);
+			this._virtualMachineOUIs.set('00-1C-42', true);
+			this._virtualMachineOUIs.set('00-16-3E', true);
+			this._virtualMachineOUIs.set('08-00-27', true);
+
+			// colon-separated
+			this._virtualMachineOUIs.set('00:50:56', true);
+			this._virtualMachineOUIs.set('00:0C:29', true);
+			this._virtualMachineOUIs.set('00:05:69', true);
+			this._virtualMachineOUIs.set('00:03:FF', true);
+			this._virtualMachineOUIs.set('00:1C:42', true);
+			this._virtualMachineOUIs.set('00:16:3E', true);
+			this._virtualMachineOUIs.set('08:00:27', true);
 		}
-		return this._virtualMachineOUIs.findSubstr(mac);
+		return !!this._virtualMachineOUIs.findSubstr(mac);
 	}
 
 	value(): number {
@@ -47,7 +56,7 @@ export const virtualMachineHint: { value(): number } = new class {
 			const interfaces = networkInterfaces();
 			for (let name in interfaces) {
 				if (Object.prototype.hasOwnProperty.call(interfaces, name)) {
-					for (const {mac, internal} of interfaces[name]) {
+					for (const { mac, internal } of interfaces[name]) {
 						if (!internal) {
 							interfaceCount += 1;
 							if (this._isVirtualMachineMacAdress(mac.toUpperCase())) {
@@ -66,57 +75,36 @@ export const virtualMachineHint: { value(): number } = new class {
 	}
 };
 
-
-const mac = new class {
-
-	private _value: string;
-
-	get value(): string {
-		if (this._value === void 0) {
-			this._initValue();
-		}
-		return this._value;
-	}
-
-	private _initValue(): void {
-		this._value = null;
-		const interfaces = networkInterfaces();
-		for (let key in interfaces) {
-			for (const i of interfaces[key]) {
-				if (!i.internal) {
-					this._value = crypto.createHash('sha256').update(i.mac, 'utf8').digest('hex');
-					return;
-				}
-			}
-		}
-		this._value = `missing-${uuid.generateUuid()}`;
-	}
-};
-
-export function _futureMachineIdExperiment(): string {
-	return mac.value;
-}
-
-let machineId: TPromise<string>;
-export function getMachineId(): TPromise<string> {
-	return machineId || (machineId = getStableMachineId()
+let machineId: Promise<string>;
+export function getMachineId(): Promise<string> {
+	return machineId || (machineId = getMacMachineId()
 		.then(id => id || uuid.generateUuid())); // fallback, generate a UUID
 }
 
-let stableMachineId: TPromise<string>;
-export function getStableMachineId(): TPromise<string> {
-	return stableMachineId || (stableMachineId = new TPromise<string>(resolve => {
-		try {
-			getmac.getMac((error, macAddress) => {
-				if (!error) {
-					resolve(crypto.createHash('sha256').update(macAddress, 'utf8').digest('hex'));
-				} else {
+function getMacMachineId(): Promise<string> {
+	return new Promise<string>(resolve => {
+		Promise.all([import('crypto'), import('getmac')]).then(([crypto, getmac]) => {
+			try {
+				getmac.getMac((error, macAddress) => {
+					if (!error) {
+						resolve(crypto.createHash('sha256').update(macAddress, 'utf8').digest('hex'));
+					} else {
+						resolve(undefined);
+					}
+				});
+
+				// Timeout due to hang with reduced privileges #58392
+				// TODO@sbatten: Remove this when getmac is patched
+				setTimeout(() => {
 					resolve(undefined);
-				}
-			});
-		} catch (err) {
+				}, 10000);
+			} catch (err) {
+				errors.onUnexpectedError(err);
+				resolve(undefined);
+			}
+		}, err => {
 			errors.onUnexpectedError(err);
 			resolve(undefined);
-		}
-	}));
+		});
+	});
 }

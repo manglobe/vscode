@@ -2,14 +2,14 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { Selection } from 'vs/editor/common/core/selection';
+import { CursorColumns, CursorConfiguration, ICursorSimpleModel, SingleCursorState } from 'vs/editor/common/controller/cursorCommon';
 import { Position } from 'vs/editor/common/core/position';
-import { SingleCursorState, CursorColumns, CursorConfiguration, ICursorSimpleModel } from 'vs/editor/common/controller/cursorCommon';
+import { Range } from 'vs/editor/common/core/range';
+import { Selection } from 'vs/editor/common/core/selection';
 
 export interface IColumnSelectResult {
-	viewSelections: Selection[];
+	viewStates: SingleCursorState[];
 	reversed: boolean;
 	toLineNumber: number;
 	toVisualColumn: number;
@@ -23,7 +23,7 @@ export class ColumnSelection {
 		let isRTL = (fromVisibleColumn > toVisibleColumn);
 		let isLTR = (fromVisibleColumn < toVisibleColumn);
 
-		let result: Selection[] = [];
+		let result: SingleCursorState[] = [];
 
 		// console.log(`fromVisibleColumn: ${fromVisibleColumn}, toVisibleColumn: ${toVisibleColumn}`);
 
@@ -55,19 +55,23 @@ export class ColumnSelection {
 				}
 			}
 
-			result.push(new Selection(lineNumber, startColumn, lineNumber, endColumn));
+			result.push(new SingleCursorState(
+				new Range(lineNumber, startColumn, lineNumber, startColumn), 0,
+				new Position(lineNumber, endColumn), 0
+			));
 		}
 
 		return {
-			viewSelections: result,
+			viewStates: result,
 			reversed: reversed,
 			toLineNumber: toLineNumber,
 			toVisualColumn: toVisibleColumn
 		};
 	}
 
-	public static columnSelect(config: CursorConfiguration, model: ICursorSimpleModel, fromViewPosition: Position, toViewLineNumber: number, toViewVisualColumn: number): IColumnSelectResult {
-		let fromViewVisibleColumn = CursorColumns.visibleColumnFromColumn2(config, model, fromViewPosition);
+	public static columnSelect(config: CursorConfiguration, model: ICursorSimpleModel, fromViewSelection: Selection, toViewLineNumber: number, toViewVisualColumn: number): IColumnSelectResult {
+		const fromViewPosition = new Position(fromViewSelection.selectionStartLineNumber, fromViewSelection.selectionStartColumn);
+		const fromViewVisibleColumn = CursorColumns.visibleColumnFromColumn2(config, model, fromViewPosition);
 		return ColumnSelection._columnSelect(config, model, fromViewPosition.lineNumber, fromViewVisibleColumn, toViewLineNumber, toViewVisualColumn);
 	}
 
@@ -76,7 +80,7 @@ export class ColumnSelection {
 			toViewVisualColumn--;
 		}
 
-		return this.columnSelect(config, model, cursor.selection.getStartPosition(), toViewLineNumber, toViewVisualColumn);
+		return this.columnSelect(config, model, cursor.selection, toViewLineNumber, toViewVisualColumn);
 	}
 
 	public static columnSelectRight(config: CursorConfiguration, model: ICursorSimpleModel, cursor: SingleCursorState, toViewLineNumber: number, toViewVisualColumn: number): IColumnSelectResult {
@@ -93,7 +97,7 @@ export class ColumnSelection {
 			toViewVisualColumn++;
 		}
 
-		return this.columnSelect(config, model, cursor.selection.getStartPosition(), toViewLineNumber, toViewVisualColumn);
+		return this.columnSelect(config, model, cursor.selection, toViewLineNumber, toViewVisualColumn);
 	}
 
 	public static columnSelectUp(config: CursorConfiguration, model: ICursorSimpleModel, cursor: SingleCursorState, isPaged: boolean, toViewLineNumber: number, toViewVisualColumn: number): IColumnSelectResult {
@@ -104,7 +108,7 @@ export class ColumnSelection {
 			toViewLineNumber = 1;
 		}
 
-		return this.columnSelect(config, model, cursor.selection.getStartPosition(), toViewLineNumber, toViewVisualColumn);
+		return this.columnSelect(config, model, cursor.selection, toViewLineNumber, toViewVisualColumn);
 	}
 
 	public static columnSelectDown(config: CursorConfiguration, model: ICursorSimpleModel, cursor: SingleCursorState, isPaged: boolean, toViewLineNumber: number, toViewVisualColumn: number): IColumnSelectResult {
@@ -115,6 +119,6 @@ export class ColumnSelection {
 			toViewLineNumber = model.getLineCount();
 		}
 
-		return this.columnSelect(config, model, cursor.selection.getStartPosition(), toViewLineNumber, toViewVisualColumn);
+		return this.columnSelect(config, model, cursor.selection, toViewLineNumber, toViewVisualColumn);
 	}
 }

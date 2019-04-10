@@ -3,374 +3,474 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import nls = require('vs/nls');
-import platform = require('vs/base/common/platform');
-import URI from 'vs/base/common/uri';
-import errors = require('vs/base/common/errors');
-import types = require('vs/base/common/types');
-import { TPromise } from 'vs/base/common/winjs.base';
-import { stat } from 'vs/base/node/pfs';
-import arrays = require('vs/base/common/arrays');
-import DOM = require('vs/base/browser/dom');
-import Severity from 'vs/base/common/severity';
+import * as nls from 'vs/nls';
+import { URI } from 'vs/base/common/uri';
+import * as errors from 'vs/base/common/errors';
+import { equals, deepClone, assign } from 'vs/base/common/objects';
+import * as DOM from 'vs/base/browser/dom';
 import { Separator } from 'vs/base/browser/ui/actionbar/actionbar';
 import { IAction, Action } from 'vs/base/common/actions';
-import { extractResources } from 'vs/base/browser/dnd';
-import { Builder, $ } from 'vs/base/browser/builder';
-import { IPartService } from 'vs/workbench/services/part/common/partService';
-import { AutoSaveConfiguration } from 'vs/platform/files/common/files';
-import { toResource } from 'vs/workbench/common/editor';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
-import { IEditorGroupService } from 'vs/workbench/services/group/common/groupService';
-import { IMessageService } from 'vs/platform/message/common/message';
-import { IWorkspaceConfigurationService } from 'vs/workbench/services/configuration/common/configuration';
-import { IWindowsService, IWindowService, IWindowSettings } from 'vs/platform/windows/common/windows';
+import { IFileService } from 'vs/platform/files/common/files';
+import { toResource, IUntitledResourceInput, SideBySideEditor } from 'vs/workbench/common/editor';
+import { IEditorService, IResourceEditor } from 'vs/workbench/services/editor/common/editorService';
+import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
+import { IWindowsService, IWindowService, IWindowSettings, IOpenFileRequest, IWindowsConfiguration, IAddFoldersRequest, IRunActionInWindowRequest, IPathData, IRunKeybindingInWindowRequest } from 'vs/platform/windows/common/windows';
 import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
-import { IWindowIPCService } from 'vs/workbench/services/window/electron-browser/windowService';
-import { IUntitledEditorService } from 'vs/workbench/services/untitled/common/untitledEditorService';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
-import { IPath, IOpenFileRequest, IWindowConfiguration } from 'vs/workbench/electron-browser/common';
-import { IConfigurationEditingService, ConfigurationTarget } from 'vs/workbench/services/configuration/common/configurationEditing';
 import { ITitleService } from 'vs/workbench/services/title/common/titleService';
-import { Registry } from 'vs/platform/platform';
-import { IWorkbenchActionRegistry, Extensions } from 'vs/workbench/common/actionRegistry';
-import { SyncActionDescriptor } from 'vs/platform/actions/common/actions';
-import { IThemeService, VS_HC_THEME, VS_DARK_THEME } from 'vs/workbench/services/themes/common/themeService';
+import { IWorkbenchThemeService, VS_HC_THEME } from 'vs/workbench/services/themes/common/workbenchThemeService';
 import * as browser from 'vs/base/browser/browser';
-import { ReloadWindowAction, ToggleDevToolsAction, ShowStartupPerformance, OpenRecentAction } from 'vs/workbench/electron-browser/actions';
-import { KeyMod, KeyCode } from 'vs/base/common/keyCodes';
 import { ICommandService } from 'vs/platform/commands/common/commands';
-import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
-import { Position, IResourceInput } from 'vs/platform/editor/common/editor';
-import { IExtensionService } from 'vs/platform/extensions/common/extensions';
-
-import { remote, ipcRenderer as ipc, webFrame } from 'electron';
-
-const dialog = remote.dialog;
+import { IResourceInput } from 'vs/platform/editor/common/editor';
+import { KeyboardMapperFactory } from 'vs/workbench/services/keybinding/electron-browser/keybindingService';
+import { ipcRenderer as ipc, webFrame, crashReporter, Event } from 'electron';
+import { IWorkspaceEditingService } from 'vs/workbench/services/workspace/common/workspaceEditing';
+import { IMenuService, MenuId, IMenu, MenuItemAction, ICommandAction } from 'vs/platform/actions/common/actions';
+import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
+import { fillInActionBarActions } from 'vs/platform/actions/browser/menuItemActionItem';
+import { RunOnceScheduler } from 'vs/base/common/async';
+import { IDisposable, dispose, Disposable } from 'vs/base/common/lifecycle';
+import { LifecyclePhase, ILifecycleService } from 'vs/platform/lifecycle/common/lifecycle';
+import { IWorkspaceFolderCreationData } from 'vs/platform/workspaces/common/workspaces';
+import { IIntegrityService } from 'vs/workbench/services/integrity/common/integrity';
+import { isRootUser, isWindows, isMacintosh, isLinux } from 'vs/base/common/platform';
+import product from 'vs/platform/product/node/product';
+import pkg from 'vs/platform/product/node/package';
+import { INotificationService } from 'vs/platform/notification/common/notification';
+import { EditorServiceImpl } from 'vs/workbench/browser/parts/editor/editor';
+import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
+import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
+import { IAccessibilityService, AccessibilitySupport } from 'vs/platform/accessibility/common/accessibility';
+import { WorkbenchState, IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
+import { coalesce } from 'vs/base/common/arrays';
+import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 
 const TextInputActions: IAction[] = [
-	new Action('undo', nls.localize('undo', "Undo"), null, true, () => document.execCommand('undo') && TPromise.as(true)),
-	new Action('redo', nls.localize('redo', "Redo"), null, true, () => document.execCommand('redo') && TPromise.as(true)),
+	new Action('undo', nls.localize('undo', "Undo"), undefined, true, () => Promise.resolve(document.execCommand('undo'))),
+	new Action('redo', nls.localize('redo', "Redo"), undefined, true, () => Promise.resolve(document.execCommand('redo'))),
 	new Separator(),
-	new Action('editor.action.clipboardCutAction', nls.localize('cut', "Cut"), null, true, () => document.execCommand('cut') && TPromise.as(true)),
-	new Action('editor.action.clipboardCopyAction', nls.localize('copy', "Copy"), null, true, () => document.execCommand('copy') && TPromise.as(true)),
-	new Action('editor.action.clipboardPasteAction', nls.localize('paste', "Paste"), null, true, () => document.execCommand('paste') && TPromise.as(true)),
+	new Action('editor.action.clipboardCutAction', nls.localize('cut', "Cut"), undefined, true, () => Promise.resolve(document.execCommand('cut'))),
+	new Action('editor.action.clipboardCopyAction', nls.localize('copy', "Copy"), undefined, true, () => Promise.resolve(document.execCommand('copy'))),
+	new Action('editor.action.clipboardPasteAction', nls.localize('paste', "Paste"), undefined, true, () => Promise.resolve(document.execCommand('paste'))),
 	new Separator(),
-	new Action('editor.action.selectAll', nls.localize('selectAll', "Select All"), null, true, () => document.execCommand('selectAll') && TPromise.as(true))
+	new Action('editor.action.selectAll', nls.localize('selectAll', "Select All"), undefined, true, () => Promise.resolve(document.execCommand('selectAll')))
 ];
 
-export class ElectronWindow {
+export class ElectronWindow extends Disposable {
 
-	private static AUTO_SAVE_SETTING = 'files.autoSave';
+	private touchBarMenu?: IMenu;
+	private touchBarUpdater: RunOnceScheduler;
+	private touchBarDisposables: IDisposable[];
+	private lastInstalledTouchedBar: ICommandAction[][];
 
-	private win: Electron.BrowserWindow;
-	private windowId: number;
+	private previousConfiguredZoomLevel: number;
+
+	private addFoldersScheduler: RunOnceScheduler;
+	private pendingFoldersToAdd: URI[];
+
+	private closeEmptyWindowScheduler: RunOnceScheduler = this._register(new RunOnceScheduler(() => this.onAllEditorsClosed(), 50));
 
 	constructor(
-		win: Electron.BrowserWindow,
-		shellContainer: HTMLElement,
-		@IWindowIPCService private windowIPCService: IWindowIPCService,
-		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
-		@IEditorGroupService private editorGroupService: IEditorGroupService,
-		@IPartService private partService: IPartService,
-		@IWindowsService private windowsService: IWindowsService,
-		@IWindowService private windowService: IWindowService,
-		@IWorkspaceConfigurationService private configurationService: IWorkspaceConfigurationService,
-		@ITitleService private titleService: ITitleService,
-		@IThemeService private themeService: IThemeService,
-		@IMessageService private messageService: IMessageService,
-		@IConfigurationEditingService private configurationEditingService: IConfigurationEditingService,
-		@ICommandService private commandService: ICommandService,
-		@IExtensionService private extensionService: IExtensionService,
-		@IViewletService private viewletService: IViewletService,
-		@IContextMenuService private contextMenuService: IContextMenuService,
-		@IKeybindingService private keybindingService: IKeybindingService,
-		@IEnvironmentService private environmentService: IEnvironmentService,
-		@IUntitledEditorService private untitledEditorService: IUntitledEditorService,
+		@IEditorService private readonly editorService: EditorServiceImpl,
+		@IWindowsService private readonly windowsService: IWindowsService,
+		@IWindowService private readonly windowService: IWindowService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ITitleService private readonly titleService: ITitleService,
+		@IWorkbenchThemeService protected themeService: IWorkbenchThemeService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@ICommandService private readonly commandService: ICommandService,
+		@IKeybindingService private readonly keybindingService: IKeybindingService,
+		@IContextMenuService private readonly contextMenuService: IContextMenuService,
+		@ITelemetryService private readonly telemetryService: ITelemetryService,
+		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService,
+		@IFileService private readonly fileService: IFileService,
+		@IMenuService private readonly menuService: IMenuService,
+		@ILifecycleService private readonly lifecycleService: ILifecycleService,
+		@IIntegrityService private readonly integrityService: IIntegrityService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
+		@IWorkspaceContextService private readonly contextService: IWorkspaceContextService
 	) {
-		this.win = win;
-		this.windowId = win.id;
+		super();
+
+		this.touchBarDisposables = [];
+
+		this.pendingFoldersToAdd = [];
+		this.addFoldersScheduler = this._register(new RunOnceScheduler(() => this.doAddFolders(), 100));
 
 		this.registerListeners();
-		this.setup();
+		this.create();
 	}
 
 	private registerListeners(): void {
 
-		// React to editor input changes (Mac only)
-		if (platform.platform === platform.Platform.Mac) {
-			this.editorGroupService.onEditorsChanged(() => {
-				const file = toResource(this.editorService.getActiveEditorInput(), { supportSideBySide: true, filter: 'file' });
-
-				this.titleService.setRepresentedFilename(file ? file.fsPath : '');
-			});
-		}
-
-		let draggedExternalResources: URI[];
-		let dropOverlay: Builder;
-
-		function cleanUp(): void {
-			draggedExternalResources = void 0;
-
-			if (dropOverlay) {
-				dropOverlay.destroy();
-				dropOverlay = void 0;
-			}
-		}
-
-		// Detect resources dropped into Code from outside
-		window.document.body.addEventListener(DOM.EventType.DRAG_OVER, (e: DragEvent) => {
-			DOM.EventHelper.stop(e);
-
-			if (!draggedExternalResources) {
-				draggedExternalResources = extractResources(e, true /* external only */).map(d => d.resource);
-
-				// Find out if folders are dragged and show the appropiate feedback then
-				this.includesFolder(draggedExternalResources).done(includesFolder => {
-					if (includesFolder) {
-						dropOverlay = $(window.document.getElementById(this.partService.getWorkbenchElementId()))
-							.div({ id: 'monaco-workbench-drop-overlay' })
-							.on(DOM.EventType.DROP, (e: DragEvent) => {
-								DOM.EventHelper.stop(e, true);
-
-								this.focus(); // make sure this window has focus so that the open call reaches the right window!
-
-								// Ask the user when opening a potential large number of folders
-								let doOpen = true;
-								if (draggedExternalResources.length > 20) {
-									doOpen = this.messageService.confirm({
-										message: nls.localize('confirmOpen', "Are you sure you want to open {0} folders?", draggedExternalResources.length),
-										primaryButton: nls.localize({ key: 'confirmOpenButton', comment: ['&& denotes a mnemonic'] }, "&&Open")
-									});
-								}
-
-								if (doOpen) {
-									this.windowsService.openWindow(draggedExternalResources.map(r => r.fsPath), { forceReuseWindow: true });
-								}
-
-								cleanUp();
-							})
-							.on([DOM.EventType.DRAG_LEAVE, DOM.EventType.DRAG_END], () => {
-								cleanUp();
-							}).once(DOM.EventType.MOUSE_OVER, () => {
-								// Under some circumstances we have seen reports where the drop overlay is not being
-								// cleaned up and as such the editor area remains under the overlay so that you cannot
-								// type into the editor anymore. This seems related to using VMs and DND via host and
-								// guest OS, though some users also saw it without VMs.
-								// To protect against this issue we always destroy the overlay as soon as we detect a
-								// mouse event over it. The delay is used to guarantee we are not interfering with the
-								// actual DROP event that can also trigger a mouse over event.
-								// See also: https://github.com/Microsoft/vscode/issues/10970
-								setTimeout(() => {
-									cleanUp();
-								}, 300);
-							});
-					}
-				});
-			}
-		});
-
-		// Clear our map and overlay on any finish of DND outside the overlay
-		[DOM.EventType.DROP, DOM.EventType.DRAG_END].forEach(event => {
-			window.document.body.addEventListener(event, (e: DragEvent) => {
-				if (!dropOverlay || e.target !== dropOverlay.getHTMLElement()) {
-					cleanUp(); // only run cleanUp() if we are not over the overlay (because we are being called in capture phase)
-				}
-			}, true /* use capture because components within may preventDefault() when they accept the drop */);
-		});
+		// React to editor input changes
+		this._register(this.editorService.onDidActiveEditorChange(() => this.updateTouchbarMenu()));
 
 		// prevent opening a real URL inside the shell
-		window.document.body.addEventListener(DOM.EventType.DROP, (e: DragEvent) => {
-			DOM.EventHelper.stop(e);
+		[DOM.EventType.DRAG_OVER, DOM.EventType.DROP].forEach(event => {
+			window.document.body.addEventListener(event, (e: DragEvent) => {
+				DOM.EventHelper.stop(e);
+			});
 		});
-
-		// Handle window.open() calls
-		const $this = this;
-		(<any>window).open = function (url: string, target: string, features: string, replace: boolean) {
-			$this.windowsService.openExternal(url);
-
-			return null;
-		};
-	}
-
-	private setup(): void {
 
 		// Support runAction event
-		ipc.on('vscode:runAction', (event, actionId: string) => {
-			this.commandService.executeCommand(actionId, { from: 'menu' }).done(undefined, err => this.messageService.show(Severity.Error, err));
-		});
+		ipc.on('vscode:runAction', (event: Event, request: IRunActionInWindowRequest) => {
+			const args: unknown[] = request.args || [];
 
-		// Support resolve keybindings event
-		ipc.on('vscode:resolveKeybindings', (event, rawActionIds: string) => {
-			let actionIds: string[] = [];
-			try {
-				actionIds = JSON.parse(rawActionIds);
-			} catch (error) {
-				// should not happen
+			// If we run an action from the touchbar, we fill in the currently active resource
+			// as payload because the touch bar items are context aware depending on the editor
+			if (request.from === 'touchbar') {
+				const activeEditor = this.editorService.activeEditor;
+				if (activeEditor) {
+					const resource = toResource(activeEditor, { supportSideBySide: SideBySideEditor.MASTER });
+					if (resource) {
+						args.push(resource);
+					}
+				}
+			} else {
+				args.push({ from: request.from }); // TODO@telemetry this is a bit weird to send this to every action?
 			}
 
-			// Resolve keys using the keybinding service and send back to browser process
-			this.resolveKeybindings(actionIds).done(keybindings => {
-				if (keybindings.length) {
-					ipc.send('vscode:keybindingsResolved', JSON.stringify(keybindings));
-				}
-			}, () => errors.onUnexpectedError);
+			this.commandService.executeCommand(request.id, ...args).then(_ => {
+				/* __GDPR__
+					"commandExecuted" : {
+						"id" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+						"from": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+					}
+				*/
+				this.telemetryService.publicLog('commandExecuted', { id: request.id, from: request.from });
+			}, err => {
+				this.notificationService.error(err);
+			});
 		});
 
-		// Send over all extension viewlets when extensions are ready
-		this.extensionService.onReady().then(() => {
-			ipc.send('vscode:extensionViewlets', JSON.stringify(this.viewletService.getViewlets().filter(v => !!v.extensionId).map(v => { return { id: v.id, label: v.name }; })));
+		// Support runKeybinding event
+		ipc.on('vscode:runKeybinding', (event: Event, request: IRunKeybindingInWindowRequest) => {
+			if (document.activeElement) {
+				this.keybindingService.dispatchByUserSettingsLabel(request.userSettingsLabel, document.activeElement);
+			}
 		});
 
-		ipc.on('vscode:reportError', (event, error) => {
+		// Error reporting from main
+		ipc.on('vscode:reportError', (event: Event, error: string) => {
 			if (error) {
-				const errorParsed = JSON.parse(error);
-				errorParsed.mainProcess = true;
-				errors.onUnexpectedError(errorParsed);
+				errors.onUnexpectedError(JSON.parse(error));
 			}
 		});
 
 		// Support openFiles event for existing and new files
-		ipc.on('vscode:openFiles', (event, request: IOpenFileRequest) => this.onOpenFiles(request));
+		ipc.on('vscode:openFiles', (event: Event, request: IOpenFileRequest) => this.onOpenFiles(request));
 
-		// Emit event when vscode has loaded
-		this.partService.joinCreation().then(() => {
-			ipc.send('vscode:workbenchLoaded', this.windowIPCService.getWindowId());
-		});
+		// Support addFolders event if we have a workspace opened
+		ipc.on('vscode:addFolders', (event: Event, request: IAddFoldersRequest) => this.onAddFoldersRequest(request));
 
 		// Message support
-		ipc.on('vscode:showInfoMessage', (event, message: string) => {
-			this.messageService.show(Severity.Info, message);
-		});
-
-		// Support toggling auto save
-		ipc.on('vscode.toggleAutoSave', event => {
-			this.toggleAutoSave();
+		ipc.on('vscode:showInfoMessage', (event: Event, message: string) => {
+			this.notificationService.info(message);
 		});
 
 		// Fullscreen Events
-		ipc.on('vscode:enterFullScreen', event => {
-			this.partService.joinCreation().then(() => {
+		ipc.on('vscode:enterFullScreen', () => {
+			this.lifecycleService.when(LifecyclePhase.Ready).then(() => {
 				browser.setFullscreen(true);
 			});
 		});
 
-		ipc.on('vscode:leaveFullScreen', event => {
-			this.partService.joinCreation().then(() => {
+		ipc.on('vscode:leaveFullScreen', () => {
+			this.lifecycleService.when(LifecyclePhase.Ready).then(() => {
 				browser.setFullscreen(false);
 			});
 		});
 
 		// High Contrast Events
-		ipc.on('vscode:enterHighContrast', event => {
-			const windowConfig = this.configurationService.getConfiguration<IWindowSettings>('window');
+		ipc.on('vscode:enterHighContrast', () => {
+			const windowConfig = this.configurationService.getValue<IWindowSettings>('window');
 			if (windowConfig && windowConfig.autoDetectHighContrast) {
-				this.partService.joinCreation().then(() => {
-					this.themeService.setColorTheme(VS_HC_THEME, null);
+				this.lifecycleService.when(LifecyclePhase.Ready).then(() => {
+					this.themeService.setColorTheme(VS_HC_THEME, undefined);
 				});
 			}
 		});
 
-		ipc.on('vscode:leaveHighContrast', event => {
-			const windowConfig = this.configurationService.getConfiguration<IWindowSettings>('window');
+		ipc.on('vscode:leaveHighContrast', () => {
+			const windowConfig = this.configurationService.getValue<IWindowSettings>('window');
 			if (windowConfig && windowConfig.autoDetectHighContrast) {
-				this.partService.joinCreation().then(() => {
-					this.themeService.setColorTheme(VS_DARK_THEME, null);
+				this.lifecycleService.when(LifecyclePhase.Ready).then(() => {
+					this.themeService.restoreColorTheme();
 				});
 			}
 		});
 
-		// Configuration changes
-		let previousConfiguredZoomLevel: number;
-		this.configurationService.onDidUpdateConfiguration(e => {
-			const windowConfig: IWindowConfiguration = e.config;
-
-			let newZoomLevel = 0;
-			if (windowConfig.window && typeof windowConfig.window.zoomLevel === 'number') {
-				newZoomLevel = windowConfig.window.zoomLevel;
-
-				// Leave early if the configured zoom level did not change (https://github.com/Microsoft/vscode/issues/1536)
-				if (previousConfiguredZoomLevel === newZoomLevel) {
-					return;
-				}
-
-				previousConfiguredZoomLevel = newZoomLevel;
-			}
-
-			if (webFrame.getZoomLevel() !== newZoomLevel) {
-				webFrame.setZoomLevel(newZoomLevel);
-				browser.setZoomFactor(webFrame.getZoomFactor());
-				browser.setZoomLevel(webFrame.getZoomLevel()); // Ensure others can listen to zoom level changes
-			}
+		// keyboard layout changed event
+		ipc.on('vscode:keyboardLayoutChanged', () => {
+			KeyboardMapperFactory.INSTANCE._onKeyboardLayoutChanged();
 		});
+
+		// keyboard layout changed event
+		ipc.on('vscode:accessibilitySupportChanged', (event: Event, accessibilitySupportEnabled: boolean) => {
+			this.accessibilityService.setAccessibilitySupport(accessibilitySupportEnabled ? AccessibilitySupport.Enabled : AccessibilitySupport.Disabled);
+		});
+
+		// Zoom level changes
+		this.updateWindowZoomLevel();
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('window.zoomLevel')) {
+				this.updateWindowZoomLevel();
+			}
+		}));
 
 		// Context menu support in input/textarea
-		window.document.addEventListener('contextmenu', e => {
-			if (e.target instanceof HTMLElement) {
-				const target = <HTMLElement>e.target;
-				if (target.nodeName && (target.nodeName.toLowerCase() === 'input' || target.nodeName.toLowerCase() === 'textarea')) {
-					e.preventDefault();
-					e.stopPropagation();
+		window.document.addEventListener('contextmenu', e => this.onContextMenu(e));
 
-					this.contextMenuService.showContextMenu({
-						getAnchor: () => target,
-						getActions: () => TPromise.as(TextInputActions),
-						getKeyBinding: action => {
-							const [kb] = this.keybindingService.lookupKeybindings(action.id);
+		// Listen to visible editor changes
+		this._register(this.editorService.onDidVisibleEditorsChange(() => this.onDidVisibleEditorsChange()));
 
-							return kb;
-						}
-					});
-				}
-			}
-		});
+		// Listen to editor closing (if we run with --wait)
+		const filesToWait = this.environmentService.configuration.filesToWait;
+		if (filesToWait) {
+			const resourcesToWaitFor = coalesce(filesToWait.paths.map(p => p.fileUri));
+			const waitMarkerFile = filesToWait.waitMarkerFileUri;
+			const listenerDispose = this.editorService.onDidCloseEditor(() => this.onEditorClosed(listenerDispose, resourcesToWaitFor, waitMarkerFile));
 
-		// Developer related actions
-		const developerCategory = nls.localize('developer', "Developer");
-		const workbenchActionsRegistry = Registry.as<IWorkbenchActionRegistry>(Extensions.WorkbenchActions);
-		const isDeveloping = !this.environmentService.isBuilt || this.environmentService.isExtensionDevelopment;
-		workbenchActionsRegistry.registerWorkbenchAction(new SyncActionDescriptor(ReloadWindowAction, ReloadWindowAction.ID, ReloadWindowAction.LABEL, isDeveloping ? { primary: KeyMod.CtrlCmd | KeyCode.KEY_R } : void 0), 'Reload Window');
-		workbenchActionsRegistry.registerWorkbenchAction(new SyncActionDescriptor(ToggleDevToolsAction, ToggleDevToolsAction.ID, ToggleDevToolsAction.LABEL, isDeveloping ? { primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_I, mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KEY_I } } : void 0), 'Developer: Toggle Developer Tools', developerCategory);
-		workbenchActionsRegistry.registerWorkbenchAction(new SyncActionDescriptor(ShowStartupPerformance, ShowStartupPerformance.ID, ShowStartupPerformance.LABEL), 'Developer: Startup Performance', developerCategory);
-
-		// Action registered here to prevent a keybinding conflict with reload window
-		const fileCategory = nls.localize('file', "File");
-		workbenchActionsRegistry.registerWorkbenchAction(new SyncActionDescriptor(OpenRecentAction, OpenRecentAction.ID, OpenRecentAction.LABEL, { primary: isDeveloping ? null : KeyMod.CtrlCmd | KeyCode.KEY_R, mac: { primary: KeyMod.WinCtrl | KeyCode.KEY_R } }), 'File: Open Recent', fileCategory);
+			this._register(listenerDispose);
+		}
 	}
 
-	private resolveKeybindings(actionIds: string[]): TPromise<{ id: string; label: string, isNative: boolean; }[]> {
-		return this.partService.joinCreation().then(() => {
-			return arrays.coalesce(actionIds.map(id => {
-				const bindings = this.keybindingService.lookupKeybindings(id);
+	private onDidVisibleEditorsChange(): void {
 
-				// return the first binding that can be represented by electron
-				for (let i = 0; i < bindings.length; i++) {
-					const binding = bindings[i];
+		// Close when empty: check if we should close the window based on the setting
+		// Overruled by: window has a workspace opened or this window is for extension development
+		// or setting is disabled. Also enabled when running with --wait from the command line.
+		const visibleEditors = this.editorService.visibleControls;
+		if (visibleEditors.length === 0 && this.contextService.getWorkbenchState() === WorkbenchState.EMPTY && !this.environmentService.isExtensionDevelopment) {
+			const closeWhenEmpty = this.configurationService.getValue<boolean>('window.closeWhenEmpty');
+			if (closeWhenEmpty || this.environmentService.args.wait) {
+				this.closeEmptyWindowScheduler.schedule();
+			}
+		}
+	}
 
-					// first try to resolve a native accelerator
-					const electronAccelerator = this.keybindingService.getElectronAcceleratorFor(binding);
-					if (electronAccelerator) {
-						return { id, label: electronAccelerator, isNative: true };
-					}
+	private onAllEditorsClosed(): void {
+		const visibleEditors = this.editorService.visibleControls.length;
+		if (visibleEditors === 0) {
+			this.windowService.closeWindow();
+		}
+	}
 
-					// we need this fallback to support keybindings that cannot show in electron menus (e.g. chords)
-					const acceleratorLabel = this.keybindingService.getLabelFor(binding);
-					if (acceleratorLabel) {
-						return { id, label: acceleratorLabel, isNative: false };
-					}
+	private onEditorClosed(listenerDispose: IDisposable, resourcesToWaitFor: URI[], waitMarkerFile: URI): void {
+
+		// In wait mode, listen to changes to the editors and wait until the files
+		// are closed that the user wants to wait for. When this happens we delete
+		// the wait marker file to signal to the outside that editing is done.
+		if (resourcesToWaitFor.every(resource => !this.editorService.isOpen({ resource }))) {
+			listenerDispose.dispose();
+			this.fileService.del(waitMarkerFile);
+		}
+	}
+
+	private onContextMenu(e: MouseEvent): void {
+		if (e.target instanceof HTMLElement) {
+			const target = <HTMLElement>e.target;
+			if (target.nodeName && (target.nodeName.toLowerCase() === 'input' || target.nodeName.toLowerCase() === 'textarea')) {
+				DOM.EventHelper.stop(e, true);
+
+				this.contextMenuService.showContextMenu({
+					getAnchor: () => e,
+					getActions: () => TextInputActions,
+					onHide: () => target.focus() // fixes https://github.com/Microsoft/vscode/issues/52948
+				});
+			}
+		}
+	}
+
+	private updateWindowZoomLevel(): void {
+		const windowConfig: IWindowsConfiguration = this.configurationService.getValue<IWindowsConfiguration>();
+
+		let newZoomLevel = 0;
+		if (windowConfig.window && typeof windowConfig.window.zoomLevel === 'number') {
+			newZoomLevel = windowConfig.window.zoomLevel;
+
+			// Leave early if the configured zoom level did not change (https://github.com/Microsoft/vscode/issues/1536)
+			if (this.previousConfiguredZoomLevel === newZoomLevel) {
+				return;
+			}
+
+			this.previousConfiguredZoomLevel = newZoomLevel;
+		}
+
+		if (webFrame.getZoomLevel() !== newZoomLevel) {
+			webFrame.setZoomLevel(newZoomLevel);
+			browser.setZoomFactor(webFrame.getZoomFactor());
+			// See https://github.com/Microsoft/vscode/issues/26151
+			// Cannot be trusted because the webFrame might take some time
+			// until it really applies the new zoom level
+			browser.setZoomLevel(webFrame.getZoomLevel(), /*isTrusted*/false);
+		}
+	}
+
+	private create(): void {
+
+		// Handle window.open() calls
+		const $this = this;
+		window.open = function (url: string, target: string, features: string, replace: boolean): Window | null {
+			$this.windowsService.openExternal(url);
+
+			return null;
+		};
+
+		// Emit event when vscode is ready
+		this.lifecycleService.when(LifecyclePhase.Ready).then(() => {
+			ipc.send('vscode:workbenchReady', this.windowService.windowId);
+		});
+
+		// Integrity warning
+		this.integrityService.isPure().then(res => this.titleService.updateProperties({ isPure: res.isPure }));
+
+		// Root warning
+		this.lifecycleService.when(LifecyclePhase.Restored).then(() => {
+			let isAdminPromise: Promise<boolean>;
+			if (isWindows) {
+				isAdminPromise = import('native-is-elevated').then(isElevated => isElevated());
+			} else {
+				isAdminPromise = Promise.resolve(isRootUser());
+			}
+
+			return isAdminPromise.then(isAdmin => {
+
+				// Update title
+				this.titleService.updateProperties({ isAdmin });
+
+				// Show warning message (unix only)
+				if (isAdmin && !isWindows) {
+					this.notificationService.warn(nls.localize('runningAsRoot', "It is not recommended to run {0} as root user.", product.nameShort));
+				}
+			});
+		});
+
+		// Touchbar menu (if enabled)
+		this.updateTouchbarMenu();
+
+		// Crash reporter (if enabled)
+		if (!this.environmentService.disableCrashReporter && product.crashReporter && product.hockeyApp && this.configurationService.getValue('telemetry.enableCrashReporter')) {
+			this.setupCrashReporter();
+		}
+	}
+
+	private updateTouchbarMenu(): void {
+		if (
+			!isMacintosh || // macOS only
+			!this.configurationService.getValue<boolean>('keyboard.touchbar.enabled') // disabled via setting
+		) {
+			return;
+		}
+
+		// Dispose old
+		this.touchBarDisposables = dispose(this.touchBarDisposables);
+		this.touchBarMenu = undefined;
+
+		// Create new (delayed)
+		this.touchBarUpdater = new RunOnceScheduler(() => this.doUpdateTouchbarMenu(), 300);
+		this.touchBarDisposables.push(this.touchBarUpdater);
+		this.touchBarUpdater.schedule();
+	}
+
+	private doUpdateTouchbarMenu(): void {
+		if (!this.touchBarMenu) {
+			this.touchBarMenu = this.editorService.invokeWithinEditorContext(accessor => this.menuService.createMenu(MenuId.TouchBarContext, accessor.get(IContextKeyService)));
+			this.touchBarDisposables.push(this.touchBarMenu);
+			this.touchBarDisposables.push(this.touchBarMenu.onDidChange(() => this.touchBarUpdater.schedule()));
+		}
+
+		const actions: Array<MenuItemAction | Separator> = [];
+
+		// Fill actions into groups respecting order
+		fillInActionBarActions(this.touchBarMenu, undefined, actions);
+
+		// Convert into command action multi array
+		const items: ICommandAction[][] = [];
+		let group: ICommandAction[] = [];
+		for (const action of actions) {
+
+			// Command
+			if (action instanceof MenuItemAction) {
+				group.push(action.item);
+			}
+
+			// Separator
+			else if (action instanceof Separator) {
+				if (group.length) {
+					items.push(group);
 				}
 
-				return null;
-			}));
+				group = [];
+			}
+		}
+
+		if (group.length) {
+			items.push(group);
+		}
+
+		// Only update if the actions have changed
+		if (!equals(this.lastInstalledTouchedBar, items)) {
+			this.lastInstalledTouchedBar = items;
+			this.windowService.updateTouchBar(items);
+		}
+	}
+
+	private setupCrashReporter(): void {
+
+		// base options with product info
+		const options = {
+			companyName: product.crashReporter.companyName,
+			productName: product.crashReporter.productName,
+			submitURL: isWindows ? product.hockeyApp[`win32-${process.arch}`] : isLinux ? product.hockeyApp[`linux-${process.arch}`] : product.hockeyApp.darwin,
+			extra: {
+				vscode_version: pkg.version,
+				vscode_commit: product.commit
+			}
+		};
+
+		// mixin telemetry info
+		this.telemetryService.getTelemetryInfo()
+			.then(info => {
+				assign(options.extra, {
+					vscode_sessionId: info.sessionId
+				});
+
+				// start crash reporter right here
+				crashReporter.start(deepClone(options));
+
+				// start crash reporter in the main process
+				return this.windowsService.startCrashReporter(options);
+			});
+	}
+
+	private onAddFoldersRequest(request: IAddFoldersRequest): void {
+
+		// Buffer all pending requests
+		this.pendingFoldersToAdd.push(...request.foldersToAdd.map(f => URI.revive(f)));
+
+		// Delay the adding of folders a bit to buffer in case more requests are coming
+		if (!this.addFoldersScheduler.isScheduled()) {
+			this.addFoldersScheduler.schedule();
+		}
+	}
+
+	private doAddFolders(): void {
+		const foldersToAdd: IWorkspaceFolderCreationData[] = [];
+
+		this.pendingFoldersToAdd.forEach(folder => {
+			foldersToAdd.push(({ uri: folder }));
 		});
+
+		this.pendingFoldersToAdd = [];
+
+		this.workspaceEditingService.addFolders(foldersToAdd);
 	}
 
 	private onOpenFiles(request: IOpenFileRequest): void {
-		let inputs: IResourceInput[] = [];
-		let diffMode = (request.filesToDiff.length === 2);
+		const inputs: IResourceEditor[] = [];
+		const diffMode = !!(request.filesToDiff && (request.filesToDiff.length === 2));
 
 		if (!diffMode && request.filesToOpen) {
 			inputs.push(...this.toInputs(request.filesToOpen, false));
@@ -380,21 +480,35 @@ export class ElectronWindow {
 			inputs.push(...this.toInputs(request.filesToCreate, true));
 		}
 
-		if (diffMode) {
+		if (diffMode && request.filesToDiff) {
 			inputs.push(...this.toInputs(request.filesToDiff, false));
 		}
 
 		if (inputs.length) {
-			this.openResources(inputs, diffMode).done(null, errors.onUnexpectedError);
+			this.openResources(inputs, diffMode);
+		}
+
+		if (request.filesToWait && inputs.length) {
+			// In wait mode, listen to changes to the editors and wait until the files
+			// are closed that the user wants to wait for. When this happens we delete
+			// the wait marker file to signal to the outside that editing is done.
+			const resourcesToWaitFor = request.filesToWait.paths.map(p => URI.revive(p.fileUri));
+			const waitMarkerFile = URI.revive(request.filesToWait.waitMarkerFileUri);
+			const unbind = this.editorService.onDidCloseEditor(() => {
+				if (resourcesToWaitFor.every(resource => !this.editorService.isOpen({ resource }))) {
+					unbind.dispose();
+					this.fileService.del(waitMarkerFile);
+				}
+			});
 		}
 	}
 
-	private openResources(resources: IResourceInput[], diffMode: boolean): TPromise<any> {
-		return this.partService.joinCreation().then(() => {
+	private openResources(resources: Array<IResourceInput | IUntitledResourceInput>, diffMode: boolean): void {
+		this.lifecycleService.when(LifecyclePhase.Ready).then((): Promise<unknown> => {
 
 			// In diffMode we open 2 resources as diff
 			if (diffMode && resources.length === 2) {
-				return this.editorService.openEditor({ leftResource: resources[0].resource, rightResource: resources[1].resource, options: { pinned: true } });
+				return this.editorService.openEditor({ leftResource: resources[0].resource!, rightResource: resources[1].resource!, options: { pinned: true } });
 			}
 
 			// For one file, just put it into the current active editor
@@ -403,27 +517,22 @@ export class ElectronWindow {
 			}
 
 			// Otherwise open all
-			const activeEditor = this.editorService.getActiveEditor();
-			return this.editorService.openEditors(resources.map((r, index) => {
-				return {
-					input: r,
-					position: activeEditor ? activeEditor.position : Position.ONE
-				};
-			}));
+			return this.editorService.openEditors(resources);
 		});
 	}
 
-	private toInputs(paths: IPath[], isNew: boolean): IResourceInput[] {
+	private toInputs(paths: IPathData[], isNew: boolean): IResourceEditor[] {
 		return paths.map(p => {
-			let input = <IResourceInput>{
-				resource: isNew ? this.untitledEditorService.createOrGet(URI.file(p.filePath)).getResource() : URI.file(p.filePath),
-				options: {
-					pinned: true
-				}
-			};
+			const resource = URI.revive(p.fileUri);
+			let input: IResourceInput | IUntitledResourceInput;
+			if (isNew) {
+				input = { filePath: resource.fsPath, options: { pinned: true } };
+			} else {
+				input = { resource, options: { pinned: true } };
+			}
 
-			if (!isNew && p.lineNumber) {
-				input.options.selection = {
+			if (!isNew && typeof p.lineNumber === 'number' && typeof p.columnNumber === 'number') {
+				input.options!.selection = {
 					startLineNumber: p.lineNumber,
 					startColumn: p.columnNumber
 				};
@@ -433,46 +542,9 @@ export class ElectronWindow {
 		});
 	}
 
-	private toggleAutoSave(): void {
-		const setting = this.configurationService.lookup(ElectronWindow.AUTO_SAVE_SETTING);
-		let userAutoSaveConfig = setting.user;
-		if (types.isUndefinedOrNull(userAutoSaveConfig)) {
-			userAutoSaveConfig = setting.default; // use default if setting not defined
-		}
+	dispose(): void {
+		this.touchBarDisposables = dispose(this.touchBarDisposables);
 
-		let newAutoSaveValue: string;
-		if ([AutoSaveConfiguration.AFTER_DELAY, AutoSaveConfiguration.ON_FOCUS_CHANGE, AutoSaveConfiguration.ON_WINDOW_CHANGE].some(s => s === userAutoSaveConfig)) {
-			newAutoSaveValue = AutoSaveConfiguration.OFF;
-		} else {
-			newAutoSaveValue = AutoSaveConfiguration.AFTER_DELAY;
-		}
-
-		this.configurationEditingService.writeConfiguration(ConfigurationTarget.USER, { key: ElectronWindow.AUTO_SAVE_SETTING, value: newAutoSaveValue }).done(null, error => this.messageService.show(Severity.Error, error));
-	}
-
-	private includesFolder(resources: URI[]): TPromise<boolean> {
-		return TPromise.join(resources.map(resource => {
-			return stat(resource.fsPath).then(stats => stats.isDirectory() ? true : false, error => false);
-		})).then(res => res.some(res => !!res));
-	}
-
-	public close(): void {
-		this.win.close();
-	}
-
-	public showMessageBox(options: Electron.ShowMessageBoxOptions): number {
-		return dialog.showMessageBox(this.win, options);
-	}
-
-	public showSaveDialog(options: Electron.SaveDialogOptions, callback?: (fileName: string) => void): string {
-		if (callback) {
-			return dialog.showSaveDialog(this.win, options, callback);
-		}
-
-		return dialog.showSaveDialog(this.win, options); // https://github.com/electron/electron/issues/4936
-	}
-
-	public focus(): TPromise<void> {
-		return this.windowService.focusWindow();
+		super.dispose();
 	}
 }

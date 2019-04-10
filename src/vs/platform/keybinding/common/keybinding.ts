@@ -2,14 +2,13 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { IHTMLContentElement } from 'vs/base/common/htmlContent';
-import { Keybinding } from 'vs/base/common/keyCodes';
+import { Event } from 'vs/base/common/event';
+import { KeyCode, Keybinding, ResolvedKeybinding } from 'vs/base/common/keyCodes';
+import { IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { ContextKeyExpr, IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
 import { IResolveResult } from 'vs/platform/keybinding/common/keybindingResolver';
-import Event from 'vs/base/common/event';
+import { ResolvedKeybindingItem } from 'vs/platform/keybinding/common/resolvedKeybindingItem';
 
 export interface IUserFriendlyKeybinding {
 	key: string;
@@ -18,33 +17,7 @@ export interface IUserFriendlyKeybinding {
 	when?: string;
 }
 
-export interface IKeybindings {
-	primary: number;
-	secondary?: number[];
-	win?: {
-		primary: number;
-		secondary?: number[];
-	};
-	linux?: {
-		primary: number;
-		secondary?: number[];
-	};
-	mac?: {
-		primary: number;
-		secondary?: number[];
-	};
-}
-
-export interface IKeybindingItem {
-	keybinding: number;
-	command: string;
-	commandArgs?: any;
-	when: ContextKeyExpr;
-	weight1: number;
-	weight2: number;
-}
-
-export enum KeybindingSource {
+export const enum KeybindingSource {
 	Default = 1,
 	User
 }
@@ -54,21 +27,71 @@ export interface IKeybindingEvent {
 	keybindings?: IUserFriendlyKeybinding[];
 }
 
-export let IKeybindingService = createDecorator<IKeybindingService>('keybindingService');
+export interface IKeyboardEvent {
+	readonly _standardKeyboardEventBrand: true;
+
+	readonly ctrlKey: boolean;
+	readonly shiftKey: boolean;
+	readonly altKey: boolean;
+	readonly metaKey: boolean;
+	readonly keyCode: KeyCode;
+	readonly code: string;
+}
+
+export const IKeybindingService = createDecorator<IKeybindingService>('keybindingService');
 
 export interface IKeybindingService {
 	_serviceBrand: any;
 
 	onDidUpdateKeybindings: Event<IKeybindingEvent>;
 
-	getLabelFor(keybinding: Keybinding): string;
-	getAriaLabelFor(keybinding: Keybinding): string;
-	getHTMLLabelFor(keybinding: Keybinding): IHTMLContentElement[];
-	getElectronAcceleratorFor(keybinding: Keybinding): string;
+	/**
+	 * Returns none, one or many (depending on keyboard layout)!
+	 */
+	resolveKeybinding(keybinding: Keybinding): ResolvedKeybinding[];
 
-	getDefaultKeybindings(): string;
-	lookupKeybindings(commandId: string): Keybinding[];
+	resolveKeyboardEvent(keyboardEvent: IKeyboardEvent): ResolvedKeybinding;
+
+	resolveUserBinding(userBinding: string): ResolvedKeybinding[];
+
+	/**
+	 * Resolve and dispatch `keyboardEvent` and invoke the command.
+	 */
+	dispatchEvent(e: IKeyboardEvent, target: IContextKeyServiceTarget): boolean;
+
+	/**
+	 * Resolve and dispatch `keyboardEvent`, but do not invoke the command or change inner state.
+	 */
+	softDispatch(keyboardEvent: IKeyboardEvent, target: IContextKeyServiceTarget): IResolveResult | null;
+
+	dispatchByUserSettingsLabel(userSettingsLabel: string, target: IContextKeyServiceTarget): void;
+
+	/**
+	 * Look up keybindings for a command.
+	 * Use `lookupKeybinding` if you are interested in the preferred keybinding.
+	 */
+	lookupKeybindings(commandId: string): ResolvedKeybinding[];
+
+	/**
+	 * Look up the preferred (last defined) keybinding for a command.
+	 * @returns The preferred keybinding or null if the command is not bound.
+	 */
+	lookupKeybinding(commandId: string): ResolvedKeybinding | undefined;
+
+	getDefaultKeybindingsContent(): string;
+
+	getDefaultKeybindings(): ResolvedKeybindingItem[];
+
+	getKeybindings(): ResolvedKeybindingItem[];
+
 	customKeybindingsCount(): number;
-	resolve(keybinding: Keybinding, target: IContextKeyServiceTarget): IResolveResult;
+
+	/**
+	 * Will the given key event produce a character that's rendered on screen, e.g. in a
+	 * text box. *Note* that the results of this function can be incorrect.
+	 */
+	mightProducePrintableCharacter(event: IKeyboardEvent): boolean;
+
+	_dumpDebugInfo(): string;
 }
 

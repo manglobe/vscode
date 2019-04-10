@@ -2,23 +2,40 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { ViewLineRenderingData, IViewModel, ViewModelDecoration } from 'vs/editor/common/viewModel/viewModel';
 import { Range } from 'vs/editor/common/core/range';
+import { Selection } from 'vs/editor/common/core/selection';
+import { IViewModel, IViewWhitespaceViewportData, ViewLineRenderingData, ViewModelDecoration } from 'vs/editor/common/viewModel/viewModel';
 
 export interface IPartialViewLinesViewportData {
-	viewportTop: number;
-	viewportHeight: number;
-	bigNumbersDelta: number;
-	visibleRangesDeltaTop: number;
-	startLineNumber: number;
-	endLineNumber: number;
-	relativeVerticalOffset: number[];
+	/**
+	 * Value to be substracted from `scrollTop` (in order to vertical offset numbers < 1MM)
+	 */
+	readonly bigNumbersDelta: number;
+	/**
+	 * The first (partially) visible line number.
+	 */
+	readonly startLineNumber: number;
+	/**
+	 * The last (partially) visible line number.
+	 */
+	readonly endLineNumber: number;
+	/**
+	 * relativeVerticalOffset[i] is the `top` position for line at `i` + `startLineNumber`.
+	 */
+	readonly relativeVerticalOffset: number[];
 	/**
 	 * The centered line in the viewport.
 	 */
-	centeredLineNumber: number;
+	readonly centeredLineNumber: number;
+	/**
+	 * The first completely visible line number.
+	 */
+	readonly completelyVisibleStartLineNumber: number;
+	/**
+	 * The last completely visible line number.
+	 */
+	readonly completelyVisibleEndLineNumber: number;
 }
 
 /**
@@ -26,15 +43,7 @@ export interface IPartialViewLinesViewportData {
  */
 export class ViewportData {
 
-	/**
-	 * The absolute top offset of the viewport in px.
-	 */
-	public readonly viewportTop: number;
-
-	/**
-	 * The height of the viewport in px.
-	 */
-	public readonly viewportHeight: number;
+	public readonly selections: Selection[];
 
 	/**
 	 * The line number at which to start rendering (inclusive).
@@ -47,8 +56,7 @@ export class ViewportData {
 	public readonly endLineNumber: number;
 
 	/**
-	 * relativeVerticalOffset[i] is the gap that must be left between line at
-	 * i - 1 + `startLineNumber` and i + `startLineNumber`.
+	 * relativeVerticalOffset[i] is the `top` position for line at `i` + `startLineNumber`.
 	 */
 	public readonly relativeVerticalOffset: number[];
 
@@ -57,22 +65,30 @@ export class ViewportData {
 	 */
 	public readonly visibleRange: Range;
 
+	/**
+	 * Value to be substracted from `scrollTop` (in order to vertical offset numbers < 1MM)
+	 */
 	public readonly bigNumbersDelta: number;
-	public readonly visibleRangesDeltaTop: number;
+
+	/**
+	 * Positioning information about gaps whitespace.
+	 */
+	public readonly whitespaceViewportData: IViewWhitespaceViewportData[];
 
 	private readonly _model: IViewModel;
 
 	constructor(
+		selections: Selection[],
 		partialData: IPartialViewLinesViewportData,
+		whitespaceViewportData: IViewWhitespaceViewportData[],
 		model: IViewModel
 	) {
-		this.viewportTop = partialData.viewportTop | 0;
-		this.viewportHeight = partialData.viewportHeight | 0;
+		this.selections = selections;
 		this.startLineNumber = partialData.startLineNumber | 0;
 		this.endLineNumber = partialData.endLineNumber | 0;
 		this.relativeVerticalOffset = partialData.relativeVerticalOffset;
 		this.bigNumbersDelta = partialData.bigNumbersDelta | 0;
-		this.visibleRangesDeltaTop = partialData.visibleRangesDeltaTop | 0;
+		this.whitespaceViewportData = whitespaceViewportData;
 
 		this._model = model;
 

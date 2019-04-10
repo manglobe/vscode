@@ -2,82 +2,126 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { EventEmitter, IEventEmitter } from 'vs/base/common/eventEmitter';
-import { Disposable } from 'vs/base/common/lifecycle';
 import { IKeyboardEvent } from 'vs/base/browser/keyboardEvent';
+import { Disposable } from 'vs/base/common/lifecycle';
+import { MouseTarget } from 'vs/editor/browser/controller/mouseTarget';
+import { IEditorMouseEvent, IMouseTarget, IPartialEditorMouseEvent, MouseTargetType } from 'vs/editor/browser/editorBrowser';
 import { Position } from 'vs/editor/common/core/position';
 import { Range } from 'vs/editor/common/core/range';
+import { IScrollEvent } from 'vs/editor/common/editorCommon';
+import * as viewEvents from 'vs/editor/common/view/viewEvents';
 import { IViewModel } from 'vs/editor/common/viewModel/viewModel';
-import { EventType, EditorLayoutInfo, IScrollEvent, MouseTargetType } from 'vs/editor/common/editorCommon';
-import { IEditorMouseEvent, IMouseTarget } from 'vs/editor/browser/editorBrowser';
-import { MouseTarget } from 'vs/editor/browser/controller/mouseTarget';
+import { IMouseWheelEvent } from 'vs/base/browser/mouseEvent';
+
+export interface EventCallback<T> {
+	(event: T): void;
+}
 
 export class ViewOutgoingEvents extends Disposable {
 
-	private _viewModel: IViewModel;
-	private _actual: EventEmitter;
+	public onDidScroll: EventCallback<IScrollEvent> | null = null;
+	public onDidGainFocus: EventCallback<void> | null = null;
+	public onDidLoseFocus: EventCallback<void> | null = null;
+	public onKeyDown: EventCallback<IKeyboardEvent> | null = null;
+	public onKeyUp: EventCallback<IKeyboardEvent> | null = null;
+	public onContextMenu: EventCallback<IEditorMouseEvent> | null = null;
+	public onMouseMove: EventCallback<IEditorMouseEvent> | null = null;
+	public onMouseLeave: EventCallback<IPartialEditorMouseEvent> | null = null;
+	public onMouseUp: EventCallback<IEditorMouseEvent> | null = null;
+	public onMouseDown: EventCallback<IEditorMouseEvent> | null = null;
+	public onMouseDrag: EventCallback<IEditorMouseEvent> | null = null;
+	public onMouseDrop: EventCallback<IPartialEditorMouseEvent> | null = null;
+	public onMouseWheel: EventCallback<IMouseWheelEvent> | null = null;
+
+	private readonly _viewModel: IViewModel;
 
 	constructor(viewModel: IViewModel) {
 		super();
 		this._viewModel = viewModel;
-		this._actual = this._register(new EventEmitter());
 	}
 
-	public getInternalEventBus(): IEventEmitter {
-		return this._actual;
-	}
-
-	public deferredEmit<T>(callback: () => T): T {
-		return this._actual.deferredEmit(callback);
-	}
-
-	public emitViewLayoutChanged(layoutInfo: EditorLayoutInfo): void {
-		this._actual.emit(EventType.ViewLayoutChanged, layoutInfo);
-	}
-
-	public emitScrollChanged(e: IScrollEvent): void {
-		this._actual.emit('scroll', e);
+	public emitScrollChanged(e: viewEvents.ViewScrollChangedEvent): void {
+		if (this.onDidScroll) {
+			this.onDidScroll(e);
+		}
 	}
 
 	public emitViewFocusGained(): void {
-		this._actual.emit(EventType.ViewFocusGained, {});
+		if (this.onDidGainFocus) {
+			this.onDidGainFocus(undefined);
+		}
 	}
 
 	public emitViewFocusLost(): void {
-		this._actual.emit(EventType.ViewFocusLost, {});
+		if (this.onDidLoseFocus) {
+			this.onDidLoseFocus(undefined);
+		}
 	}
 
 	public emitKeyDown(e: IKeyboardEvent): void {
-		this._actual.emit(EventType.KeyDown, e);
+		if (this.onKeyDown) {
+			this.onKeyDown(e);
+		}
 	}
 
 	public emitKeyUp(e: IKeyboardEvent): void {
-		this._actual.emit(EventType.KeyUp, e);
+		if (this.onKeyUp) {
+			this.onKeyUp(e);
+		}
 	}
 
 	public emitContextMenu(e: IEditorMouseEvent): void {
-		this._actual.emit(EventType.ContextMenu, this._convertViewToModelMouseEvent(e));
+		if (this.onContextMenu) {
+			this.onContextMenu(this._convertViewToModelMouseEvent(e));
+		}
 	}
 
 	public emitMouseMove(e: IEditorMouseEvent): void {
-		this._actual.emit(EventType.MouseMove, this._convertViewToModelMouseEvent(e));
+		if (this.onMouseMove) {
+			this.onMouseMove(this._convertViewToModelMouseEvent(e));
+		}
 	}
 
-	public emitMouseLeave(e: IEditorMouseEvent): void {
-		this._actual.emit(EventType.MouseLeave, this._convertViewToModelMouseEvent(e));
+	public emitMouseLeave(e: IPartialEditorMouseEvent): void {
+		if (this.onMouseLeave) {
+			this.onMouseLeave(this._convertViewToModelMouseEvent(e));
+		}
 	}
 
 	public emitMouseUp(e: IEditorMouseEvent): void {
-		this._actual.emit(EventType.MouseUp, this._convertViewToModelMouseEvent(e));
+		if (this.onMouseUp) {
+			this.onMouseUp(this._convertViewToModelMouseEvent(e));
+		}
 	}
 
 	public emitMouseDown(e: IEditorMouseEvent): void {
-		this._actual.emit(EventType.MouseDown, this._convertViewToModelMouseEvent(e));
+		if (this.onMouseDown) {
+			this.onMouseDown(this._convertViewToModelMouseEvent(e));
+		}
 	}
 
-	private _convertViewToModelMouseEvent(e: IEditorMouseEvent): IEditorMouseEvent {
+	public emitMouseDrag(e: IEditorMouseEvent): void {
+		if (this.onMouseDrag) {
+			this.onMouseDrag(this._convertViewToModelMouseEvent(e));
+		}
+	}
+
+	public emitMouseDrop(e: IPartialEditorMouseEvent): void {
+		if (this.onMouseDrop) {
+			this.onMouseDrop(this._convertViewToModelMouseEvent(e));
+		}
+	}
+
+	public emitMouseWheel(e: IMouseWheelEvent): void {
+		if (this.onMouseWheel) {
+			this.onMouseWheel(e);
+		}
+	}
+
+	private _convertViewToModelMouseEvent(e: IEditorMouseEvent): IEditorMouseEvent;
+	private _convertViewToModelMouseEvent(e: IPartialEditorMouseEvent): IPartialEditorMouseEvent;
+	private _convertViewToModelMouseEvent(e: IEditorMouseEvent | IPartialEditorMouseEvent): IEditorMouseEvent | IPartialEditorMouseEvent {
 		if (e.target) {
 			return {
 				event: e.event,
@@ -109,14 +153,14 @@ export class ViewOutgoingEvents extends Disposable {
 
 class ExternalMouseTarget implements IMouseTarget {
 
-	public readonly element: Element;
+	public readonly element: Element | null;
 	public readonly type: MouseTargetType;
 	public readonly mouseColumn: number;
-	public readonly position: Position;
-	public readonly range: Range;
+	public readonly position: Position | null;
+	public readonly range: Range | null;
 	public readonly detail: any;
 
-	constructor(element: Element, type: MouseTargetType, mouseColumn: number, position: Position, range: Range, detail: any) {
+	constructor(element: Element | null, type: MouseTargetType, mouseColumn: number, position: Position | null, range: Range | null, detail: any) {
 		this.element = element;
 		this.type = type;
 		this.mouseColumn = mouseColumn;

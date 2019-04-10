@@ -2,45 +2,43 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import { IContextViewService, IContextViewDelegate } from './contextView';
 import { ContextView } from 'vs/base/browser/ui/contextview/contextview';
-import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
-import { IMessageService } from 'vs/platform/message/common/message';
+import { Disposable } from 'vs/base/common/lifecycle';
+import { ILayoutService } from 'vs/platform/layout/browser/layoutService';
 
-export class ContextViewService implements IContextViewService {
-	public _serviceBrand: any;
+export class ContextViewService extends Disposable implements IContextViewService {
+	_serviceBrand: any;
 
 	private contextView: ContextView;
 
 	constructor(
-		container: HTMLElement,
-		@ITelemetryService telemetryService: ITelemetryService,
-		@IMessageService messageService: IMessageService
+		@ILayoutService readonly layoutService: ILayoutService
 	) {
-		this.contextView = new ContextView(container);
-	}
+		super();
 
-	public dispose(): void {
-		this.contextView.dispose();
+		this.contextView = this._register(new ContextView(layoutService.container));
+		this.layout();
+
+		this._register(layoutService.onLayout(() => this.layout()));
 	}
 
 	// ContextView
 
-	public setContainer(container: HTMLElement): void {
+	setContainer(container: HTMLElement): void {
 		this.contextView.setContainer(container);
 	}
 
-	public showContextView(delegate: IContextViewDelegate): void {
+	showContextView(delegate: IContextViewDelegate): void {
 		this.contextView.show(delegate);
 	}
 
-	public layout(): void {
+	layout(): void {
 		this.contextView.layout();
 	}
 
-	public hideContextView(data?: any): void {
+	hideContextView(data?: any): void {
 		this.contextView.hide(data);
 	}
 }

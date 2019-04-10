@@ -3,29 +3,31 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as assert from 'assert';
 import * as cp from 'child_process';
 import * as objects from 'vs/base/common/objects';
 import * as platform from 'vs/base/common/platform';
-import URI from 'vs/base/common/uri';
-import processes = require('vs/base/node/processes');
+import * as processes from 'vs/base/node/processes';
+import { getPathFromAmdModule } from 'vs/base/common/amd';
 
 function fork(id: string): cp.ChildProcess {
 	const opts: any = {
-		env: objects.mixin(objects.clone(process.env), {
+		env: objects.mixin(objects.deepClone(process.env), {
 			AMD_ENTRYPOINT: id,
 			PIPE_LOGGING: 'true',
 			VERBOSE_LOGGING: true
 		})
 	};
 
-	return cp.fork(URI.parse(require.toUrl('bootstrap')).fsPath, ['--type=processTests'], opts);
+	return cp.fork(getPathFromAmdModule(require, 'bootstrap-fork'), ['--type=processTests'], opts);
 }
 
 suite('Processes', () => {
 	test('buffered sending - simple data', function (done: () => void) {
+		if (process.env['VSCODE_PID']) {
+			return done(); // this test fails when run from within VS Code
+		}
+
 		const child = fork('vs/base/test/node/processes/fixtures/fork');
 		const sender = processes.createQueuedSender(child);
 
@@ -58,7 +60,7 @@ suite('Processes', () => {
 	});
 
 	test('buffered sending - lots of data (potential deadlock on win32)', function (done: () => void) {
-		if (!platform.isWindows) {
+		if (!platform.isWindows || process.env['VSCODE_PID']) {
 			return done(); // test is only relevant for Windows and seems to crash randomly on some Linux builds
 		}
 

@@ -3,123 +3,137 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as assert from 'assert';
-import { Build, Builder } from 'vs/base/browser/builder';
 import { Part } from 'vs/workbench/browser/part';
 import * as Types from 'vs/base/common/types';
-import { IWorkspaceContextService, WorkspaceContextService } from 'vs/platform/workspace/common/workspace';
-import { IStorageService } from 'vs/platform/storage/common/storage';
-import { StorageService, InMemoryLocalStorage } from 'vs/platform/storage/common/storageService';
-import { TestWorkspace } from 'vs/platform/workspace/test/common/testWorkspace';
+import { TestThemeService } from 'vs/platform/theme/test/common/testThemeService';
+import { append, $, hide } from 'vs/base/browser/dom';
+import { TestStorageService, TestLayoutService } from 'vs/workbench/test/workbenchTestServices';
+import { StorageScope } from 'vs/platform/storage/common/storage';
+import { Orientation } from 'vs/base/browser/ui/grid/grid';
 
-class MyPart extends Part {
+class SimplePart extends Part {
 
-	constructor(private expectedParent: Builder) {
-		super('myPart', { hasTitle: true });
+	minimumWidth: number;
+	maximumWidth: number;
+	minimumHeight: number;
+	maximumHeight: number;
+
+	layout(width: number, height: number, orientation: Orientation): void {
+		throw new Error('Method not implemented.');
 	}
 
-	public createTitleArea(parent: Builder): Builder {
-		assert.strictEqual(parent, this.expectedParent);
-		return super.createTitleArea(parent);
-	}
-
-	public createContentArea(parent: Builder): Builder {
-		assert.strictEqual(parent, this.expectedParent);
-		return super.createContentArea(parent);
-	}
-
-	public getMemento(storageService: IStorageService): any {
-		return super.getMemento(storageService);
+	toJSON(): object {
+		throw new Error('Method not implemented.');
 	}
 }
 
-class MyPart2 extends Part {
+class MyPart extends SimplePart {
+
+	constructor(private expectedParent: HTMLElement) {
+		super('myPart', { hasTitle: true }, new TestThemeService(), new TestStorageService(), new TestLayoutService());
+	}
+
+	createTitleArea(parent: HTMLElement): HTMLElement {
+		assert.strictEqual(parent, this.expectedParent);
+		return super.createTitleArea(parent)!;
+	}
+
+	createContentArea(parent: HTMLElement): HTMLElement {
+		assert.strictEqual(parent, this.expectedParent);
+		return super.createContentArea(parent)!;
+	}
+
+	getMemento(scope: StorageScope) {
+		return super.getMemento(scope);
+	}
+
+	saveState(): void {
+		return super.saveState();
+	}
+}
+
+class MyPart2 extends SimplePart {
 
 	constructor() {
-		super('myPart2', { hasTitle: true });
+		super('myPart2', { hasTitle: true }, new TestThemeService(), new TestStorageService(), new TestLayoutService());
 	}
 
-	public createTitleArea(parent: Builder): Builder {
-		return parent.div(function (div) {
-			div.span({
-				id: 'myPart.title',
-				innerHtml: 'Title'
-			});
-		});
+	createTitleArea(parent: HTMLElement): HTMLElement {
+		const titleContainer = append(parent, $('div'));
+		const titleLabel = append(titleContainer, $('span'));
+		titleLabel.id = 'myPart.title';
+		titleLabel.innerHTML = 'Title';
+
+		return titleContainer;
 	}
 
-	public createContentArea(parent: Builder): Builder {
-		return parent.div(function (div) {
-			div.span({
-				id: 'myPart.content',
-				innerHtml: 'Content'
-			});
-		});
+	createContentArea(parent: HTMLElement): HTMLElement {
+		const contentContainer = append(parent, $('div'));
+		const contentSpan = append(contentContainer, $('span'));
+		contentSpan.id = 'myPart.content';
+		contentSpan.innerHTML = 'Content';
+
+		return contentContainer;
 	}
 }
 
-class MyPart3 extends Part {
+class MyPart3 extends SimplePart {
 
 	constructor() {
-		super('myPart2', { hasTitle: false });
+		super('myPart2', { hasTitle: false }, new TestThemeService(), new TestStorageService(), new TestLayoutService());
 	}
 
-	public createTitleArea(parent: Builder): Builder {
-		return null;
+	createTitleArea(parent: HTMLElement): HTMLElement {
+		return null!;
 	}
 
-	public createContentArea(parent: Builder): Builder {
-		return parent.div(function (div) {
-			div.span({
-				id: 'myPart.content',
-				innerHtml: 'Content'
-			});
-		});
+	createContentArea(parent: HTMLElement): HTMLElement {
+		const contentContainer = append(parent, $('div'));
+		const contentSpan = append(contentContainer, $('span'));
+		contentSpan.id = 'myPart.content';
+		contentSpan.innerHTML = 'Content';
+
+		return contentContainer;
 	}
 }
 
-suite('Workbench Part', () => {
+suite('Workbench parts', () => {
 	let fixture: HTMLElement;
 	let fixtureId = 'workbench-part-fixture';
-	let context: IWorkspaceContextService;
-	let storage: IStorageService;
 
 	setup(() => {
 		fixture = document.createElement('div');
 		fixture.id = fixtureId;
 		document.body.appendChild(fixture);
-		context = new WorkspaceContextService(TestWorkspace);
-		storage = new StorageService(new InMemoryLocalStorage(), null, context);
 	});
 
 	teardown(() => {
 		document.body.removeChild(fixture);
 	});
 
-	test('Creation', function () {
-		let b = Build.withElementById(fixtureId);
-		b.div().hide();
+	test('Creation', () => {
+		let b = document.createElement('div');
+		document.getElementById(fixtureId)!.appendChild(b);
+		hide(b);
 
 		let part = new MyPart(b);
 		part.create(b);
 
 		assert.strictEqual(part.getId(), 'myPart');
-		assert.strictEqual(part.getContainer(), b);
 
 		// Memento
-		let memento = part.getMemento(storage);
+		let memento = part.getMemento(StorageScope.GLOBAL) as any;
 		assert(memento);
 		memento.foo = 'bar';
 		memento.bar = [1, 2, 3];
 
-		part.shutdown();
+		part.saveState();
 
 		// Re-Create to assert memento contents
 		part = new MyPart(b);
 
-		memento = part.getMemento(storage);
+		memento = part.getMemento(StorageScope.GLOBAL);
 		assert(memento);
 		assert.strictEqual(memento.foo, 'bar');
 		assert.strictEqual(memento.bar.length, 3);
@@ -128,32 +142,34 @@ suite('Workbench Part', () => {
 		delete memento.foo;
 		delete memento.bar;
 
-		part.shutdown();
+		part.saveState();
 		part = new MyPart(b);
-		memento = part.getMemento(storage);
+		memento = part.getMemento(StorageScope.GLOBAL);
 		assert(memento);
 		assert.strictEqual(Types.isEmptyObject(memento), true);
 	});
 
 	test('Part Layout with Title and Content', function () {
-		let b = Build.withElementById(fixtureId);
-		b.div().hide();
+		let b = document.createElement('div');
+		document.getElementById(fixtureId)!.appendChild(b);
+		hide(b);
 
 		let part = new MyPart2();
 		part.create(b);
 
-		assert(Build.withElementById('myPart.title'));
-		assert(Build.withElementById('myPart.content'));
+		assert(document.getElementById('myPart.title'));
+		assert(document.getElementById('myPart.content'));
 	});
 
 	test('Part Layout with Content only', function () {
-		let b = Build.withElementById(fixtureId);
-		b.div().hide();
+		let b = document.createElement('div');
+		document.getElementById(fixtureId)!.appendChild(b);
+		hide(b);
 
 		let part = new MyPart3();
 		part.create(b);
 
-		assert(!Build.withElementById('myPart.title'));
-		assert(Build.withElementById('myPart.content'));
+		assert(!document.getElementById('myPart.title'));
+		assert(document.getElementById('myPart.content'));
 	});
 });

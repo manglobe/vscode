@@ -44,20 +44,13 @@
 	/* Background rule added for IE9 - to allow clicks on dom node */
 	background:rgba(0,0,0,0);
 
-	-webkit-transition: opacity 100ms linear;
-	-o-transition: opacity 100ms linear;
-	-moz-transition: opacity 100ms linear;
-	-ms-transition: opacity 100ms linear;
 	transition: opacity 100ms linear;
 }
 .monaco-scrollable-element > .invisible {
 	opacity: 0;
+	pointer-events: none;
 }
 .monaco-scrollable-element > .invisible.fade {
-	-webkit-transition: opacity 800ms linear;
-	-o-transition: opacity 800ms linear;
-	-moz-transition: opacity 800ms linear;
-	-ms-transition: opacity 800ms linear;
 	transition: opacity 800ms linear;
 }
 
@@ -120,4 +113,28 @@
 }
 .hc-black .monaco-scrollable-element > .scrollbar > .slider.active {
 	background: rgba(111, 195, 223, 1);
+}
+
+.vs-dark .monaco-scrollable-element .shadow.top {
+	box-shadow: none;
+}
+
+.vs-dark .monaco-scrollable-element .shadow.left {
+	box-shadow: #000 6px 0 6px -6px inset;
+}
+
+.vs-dark .monaco-scrollable-element .shadow.top.left {
+	box-shadow: #000 6px 6px 6px -6px inset;
+}
+
+.hc-black .monaco-scrollable-element .shadow.top {
+	box-shadow: none;
+}
+
+.hc-black .monaco-scrollable-element .shadow.left {
+	box-shadow: none;
+}
+
+.hc-black .monaco-scrollable-element .shadow.top.left {
+	box-shadow: none;
 }

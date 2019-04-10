@@ -3,555 +3,325 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import 'vs/css!./media/activityaction';
-import nls = require('vs/nls');
-import DOM = require('vs/base/browser/dom');
-import { TPromise } from 'vs/base/common/winjs.base';
-import { Builder, $ } from 'vs/base/browser/builder';
-import { DelayedDragHandler } from 'vs/base/browser/dnd';
-import { Action, IAction } from 'vs/base/common/actions';
-import { BaseActionItem, Separator } from 'vs/base/browser/ui/actionbar/actionbar';
-import { IActivityBarService, ProgressBadge, TextBadge, NumberBadge, IconBadge, IBadge } from 'vs/workbench/services/activity/common/activityBarService';
-import Event, { Emitter } from 'vs/base/common/event';
-import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
-import { ICommandService } from 'vs/platform/commands/common/commands';
-import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
-import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
-import { ViewletDescriptor } from 'vs/workbench/browser/viewlet';
+import * as nls from 'vs/nls';
+import * as DOM from 'vs/base/browser/dom';
+import { StandardKeyboardEvent } from 'vs/base/browser/keyboardEvent';
+import { EventType as TouchEventType, GestureEvent } from 'vs/base/browser/touch';
+import { Action } from 'vs/base/common/actions';
+import { KeyCode } from 'vs/base/common/keyCodes';
 import { dispose } from 'vs/base/common/lifecycle';
-import { Keybinding } from 'vs/base/common/keyCodes';
-import { IViewletService, } from 'vs/workbench/services/viewlet/browser/viewlet';
-import { IPartService, Parts } from 'vs/workbench/services/part/common/partService';
-
-export class ActivityAction extends Action {
-	private badge: IBadge;
-	private _onDidChangeBadge = new Emitter<this>();
-
-	constructor(id: string, name: string, clazz: string) {
-		super(id, name, clazz);
-
-		this.badge = null;
-	}
-
-	public get onDidChangeBadge(): Event<this> {
-		return this._onDidChangeBadge.event;
-	}
-
-	public activate(): void {
-		if (!this.checked) {
-			this._setChecked(true);
-		}
-	}
-
-	public deactivate(): void {
-		if (this.checked) {
-			this._setChecked(false);
-		}
-	}
-
-	public getBadge(): IBadge {
-		return this.badge;
-	}
-
-	public setBadge(badge: IBadge): void {
-		this.badge = badge;
-		this._onDidChangeBadge.fire(this);
-	}
-}
+import { URI } from 'vs/base/common/uri';
+import { SyncActionDescriptor } from 'vs/platform/actions/common/actions';
+import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
+import { activeContrastBorder, focusBorder } from 'vs/platform/theme/common/colorRegistry';
+import { ICssStyleCollector, ITheme, IThemeService, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { ActivityAction, ActivityActionItem, ICompositeBar, ICompositeBarColors, ToggleCompositePinnedAction } from 'vs/workbench/browser/parts/compositeBarActions';
+import { ViewletDescriptor } from 'vs/workbench/browser/viewlet';
+import { Extensions as ActionExtensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
+import { IActivity, IGlobalActivity } from 'vs/workbench/common/activity';
+import { ACTIVITY_BAR_FOREGROUND } from 'vs/workbench/common/theme';
+import { IActivityBarService } from 'vs/workbench/services/activityBar/browser/activityBarService';
+import { IWorkbenchLayoutService, Parts } from 'vs/workbench/services/layout/browser/layoutService';
+import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
 
 export class ViewletActivityAction extends ActivityAction {
 
-	private static preventDoubleClickDelay = 300;
+	private static readonly preventDoubleClickDelay = 300;
 
 	private lastRun: number = 0;
 
 	constructor(
-		private viewlet: ViewletDescriptor,
-		@IViewletService private viewletService: IViewletService,
-		@IPartService private partService: IPartService
+		activity: IActivity,
+		@IViewletService private readonly viewletService: IViewletService,
+		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+		@ITelemetryService private readonly telemetryService: ITelemetryService
 	) {
-		super(viewlet.id, viewlet.name, viewlet.cssClass);
+		super(activity);
 	}
 
-	public run(event): TPromise<any> {
+	run(event: any): Promise<any> {
 		if (event instanceof MouseEvent && event.button === 2) {
-			return TPromise.as(false); // do not run on right click
+			return Promise.resolve(false); // do not run on right click
 		}
 
 		// prevent accident trigger on a doubleclick (to help nervous people)
 		const now = Date.now();
-		if (now - this.lastRun < ViewletActivityAction.preventDoubleClickDelay) {
-			return TPromise.as(true);
+		if (now > this.lastRun /* https://github.com/Microsoft/vscode/issues/25830 */ && now - this.lastRun < ViewletActivityAction.preventDoubleClickDelay) {
+			return Promise.resolve(true);
 		}
 		this.lastRun = now;
 
-		const sideBarVisible = this.partService.isVisible(Parts.SIDEBAR_PART);
+		const sideBarVisible = this.layoutService.isVisible(Parts.SIDEBAR_PART);
 		const activeViewlet = this.viewletService.getActiveViewlet();
 
 		// Hide sidebar if selected viewlet already visible
-		if (sideBarVisible && activeViewlet && activeViewlet.getId() === this.viewlet.id) {
-			return this.partService.setSideBarHidden(true);
+		if (sideBarVisible && activeViewlet && activeViewlet.getId() === this.activity.id) {
+			this.logAction('hide');
+			this.layoutService.setSideBarHidden(true);
+			return Promise.resolve();
 		}
 
-		return this.viewletService.openViewlet(this.viewlet.id, true)
-			.then(() => this.activate());
+		this.logAction('show');
+		return this.viewletService.openViewlet(this.activity.id, true).then(() => this.activate());
+	}
+
+	private logAction(action: string) {
+		/* __GDPR__
+			"activityBarAction" : {
+				"viewletId": { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+				"action": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+			}
+		*/
+		this.telemetryService.publicLog('activityBarAction', { viewletId: this.activity.id, action });
 	}
 }
 
-export class ActivityActionItem extends BaseActionItem {
-
-	private static manageExtensionAction: ManageExtensionAction;
-	private static toggleViewletPinnedAction: ToggleViewletPinnedAction;
-	private static draggedViewlet: ViewletDescriptor;
-
-	private $e: Builder;
-	private name: string;
-	private _keybinding: string;
-	private cssClass: string;
-	private $badge: Builder;
-	private $badgeContent: Builder;
-	private mouseUpTimeout: number;
-
-	constructor(
-		action: ActivityAction,
-		private viewlet: ViewletDescriptor,
-		@IContextMenuService private contextMenuService: IContextMenuService,
-		@IActivityBarService private activityBarService: IActivityBarService,
-		@IKeybindingService private keybindingService: IKeybindingService,
-		@IInstantiationService instantiationService: IInstantiationService
-	) {
-		super(null, action, { draggable: true });
-
-		this.cssClass = action.class;
-		this.name = viewlet.name;
-		this._keybinding = this.getKeybindingLabel(viewlet.id);
-
-		if (!ActivityActionItem.manageExtensionAction) {
-			ActivityActionItem.manageExtensionAction = instantiationService.createInstance(ManageExtensionAction);
-		}
-
-		if (!ActivityActionItem.toggleViewletPinnedAction) {
-			ActivityActionItem.toggleViewletPinnedAction = instantiationService.createInstance(ToggleViewletPinnedAction, void 0);
-		}
-
-		action.onDidChangeBadge(this.handleBadgeChangeEvenet, this, this._callOnDispose);
-	}
-
-	private getKeybindingLabel(id: string): string {
-		const [kb] = this.keybindingService.lookupKeybindings(id);
-		if (kb) {
-			return this.keybindingService.getLabelFor(kb);
-		}
-
-		return null;
-	}
-
-	public render(container: HTMLElement): void {
-		super.render(container);
-
-		this.$e = $('a.action-label').attr({
-			tabIndex: '0',
-			role: 'button'
-		}).appendTo(this.builder);
-
-		// Try hard to prevent keyboard only focus feedback when using mouse
-		this.$e.on(DOM.EventType.MOUSE_DOWN, () => {
-			this.$e.addClass('clicked');
-		});
-
-		this.$e.on(DOM.EventType.MOUSE_UP, () => {
-			if (this.mouseUpTimeout) {
-				clearTimeout(this.mouseUpTimeout);
-			}
-
-			this.mouseUpTimeout = setTimeout(() => {
-				this.$e.removeClass('clicked');
-			}, 800); // delayed to prevent focus feedback from showing on mouse up
-		});
-
-		$(container).on('contextmenu', e => {
-			DOM.EventHelper.stop(e, true);
-
-			this.showContextMenu(container);
-		});
-
-		if (this.cssClass) {
-			this.$e.addClass(this.cssClass);
-		}
-
-		this.$badge = this.builder.div({ 'class': 'badge' }, (badge: Builder) => {
-			this.$badgeContent = badge.div({ 'class': 'badge-content' });
-		});
-
-		this.$badge.hide();
-
-		this.keybinding = this._keybinding; // force update
-
-		// Activate on drag over to reveal targets
-		[this.$badge, this.$e].forEach(b => new DelayedDragHandler(b.getHTMLElement(), () => {
-			if (!ActivityActionItem.getDraggedViewlet() && !this.getAction().checked) {
-				this.getAction().run();
-			}
-		}));
-
-		// Allow to drag
-		$(container).on(DOM.EventType.DRAG_START, (e: DragEvent) => {
-			e.dataTransfer.effectAllowed = 'move';
-			this.setDraggedViewlet(this.viewlet);
-
-			// Trigger the action even on drag start to prevent clicks from failing that started a drag
-			if (!this.getAction().checked) {
-				this.getAction().run();
-			}
-		});
-
-		// Drag enter
-		let counter = 0; // see https://github.com/Microsoft/vscode/issues/14470
-		$(container).on(DOM.EventType.DRAG_ENTER, (e: DragEvent) => {
-			const draggedViewlet = ActivityActionItem.getDraggedViewlet();
-			if (draggedViewlet && draggedViewlet.id !== this.viewlet.id) {
-				counter++;
-				DOM.addClass(container, 'dropfeedback');
-			}
-		});
-
-		// Drag leave
-		$(container).on(DOM.EventType.DRAG_LEAVE, (e: DragEvent) => {
-			const draggedViewlet = ActivityActionItem.getDraggedViewlet();
-			if (draggedViewlet) {
-				counter--;
-				if (counter === 0) {
-					DOM.removeClass(container, 'dropfeedback');
-				}
-			}
-		});
-
-		// Drag end
-		$(container).on(DOM.EventType.DRAG_END, (e: DragEvent) => {
-			const draggedViewlet = ActivityActionItem.getDraggedViewlet();
-			if (draggedViewlet) {
-				counter = 0;
-				DOM.removeClass(container, 'dropfeedback');
-
-				ActivityActionItem.clearDraggedViewlet();
-			}
-		});
-
-		// Drop
-		$(container).on(DOM.EventType.DROP, (e: DragEvent) => {
-			DOM.EventHelper.stop(e, true);
-
-			const draggedViewlet = ActivityActionItem.getDraggedViewlet();
-			if (draggedViewlet && draggedViewlet.id !== this.viewlet.id) {
-				DOM.removeClass(container, 'dropfeedback');
-				ActivityActionItem.clearDraggedViewlet();
-
-				this.activityBarService.move(draggedViewlet.id, this.viewlet.id);
-			}
-		});
-	}
-
-	public static getDraggedViewlet(): ViewletDescriptor {
-		return ActivityActionItem.draggedViewlet;
-	}
-
-	private setDraggedViewlet(viewlet: ViewletDescriptor): void {
-		ActivityActionItem.draggedViewlet = viewlet;
-	}
-
-	public static clearDraggedViewlet(): void {
-		ActivityActionItem.draggedViewlet = void 0;
-	}
-
-	private showContextMenu(container: HTMLElement): void {
-		const actions: Action[] = [ActivityActionItem.toggleViewletPinnedAction];
-		if (this.viewlet.extensionId) {
-			actions.push(new Separator());
-			actions.push(ActivityActionItem.manageExtensionAction);
-		}
-
-		const isPinned = this.activityBarService.isPinned(this.viewlet.id);
-		if (isPinned) {
-			ActivityActionItem.toggleViewletPinnedAction.label = nls.localize('removeFromActivityBar', "Remove from Activity Bar");
-		} else {
-			ActivityActionItem.toggleViewletPinnedAction.label = nls.localize('keepInActivityBar', "Keep in Activity Bar");
-		}
-
-		this.contextMenuService.showContextMenu({
-			getAnchor: () => container,
-			getActionsContext: () => this.viewlet,
-			getActions: () => TPromise.as(actions)
-		});
-	}
-
-	public focus(): void {
-		this.$e.domFocus();
-	}
-
-	public setBadge(badge: IBadge): void {
-		this.updateBadge(badge);
-	}
-
-	public set keybinding(keybinding: string) {
-		this._keybinding = keybinding;
-
-		if (!this.$e) {
-			return;
-		}
-
-		let title: string;
-		if (keybinding) {
-			title = nls.localize('titleKeybinding', "{0} ({1})", this.name, keybinding);
-		} else {
-			title = this.name;
-		}
-
-		this.$e.title(title);
-		this.$badge.title(title);
-	}
-
-	private updateBadge(badge: IBadge): void {
-		this.$badgeContent.empty();
-		this.$badge.hide();
-
-		if (badge) {
-
-			// Number
-			if (badge instanceof NumberBadge) {
-				if (badge.number) {
-					this.$badgeContent.text(badge.number > 99 ? '99+' : badge.number.toString());
-					this.$badge.show();
-				}
-			}
-
-			// Text
-			else if (badge instanceof TextBadge) {
-				this.$badgeContent.text(badge.text);
-				this.$badge.show();
-			}
-
-			// Text
-			else if (badge instanceof IconBadge) {
-				this.$badge.show();
-			}
-
-			// Progress
-			else if (badge instanceof ProgressBadge) {
-				this.$badge.show();
-			}
-
-			this.$e.attr('aria-label', `${this.name} - ${badge.getDescription()}`);
-		}
-	}
-
-	protected _updateClass(): void {
-		if (this.cssClass) {
-			this.$badge.removeClass(this.cssClass);
-		}
-
-		this.cssClass = this.getAction().class;
-		this.$badge.addClass(this.cssClass);
-	}
-
-	protected _updateChecked(): void {
-		if (this.getAction().checked) {
-			this.$e.addClass('active');
-		} else {
-			this.$e.removeClass('active');
-		}
-	}
-
-	private handleBadgeChangeEvenet(): void {
-		const action = this.getAction();
-		if (action instanceof ActivityAction) {
-			this.updateBadge(action.getBadge());
-		}
-	}
-
-	protected _updateEnabled(): void {
-		if (this.getAction().enabled) {
-			this.builder.removeClass('disabled');
-		} else {
-			this.builder.addClass('disabled');
-		}
-	}
-
-	public dispose(): void {
-		super.dispose();
-
-		ActivityActionItem.clearDraggedViewlet();
-
-		if (this.mouseUpTimeout) {
-			clearTimeout(this.mouseUpTimeout);
-		}
-
-		this.$badge.destroy();
-		this.$e.destroy();
-	}
-}
-
-export class ViewletOverflowActivityAction extends ActivityAction {
-
-	constructor(
-		private showMenu: () => void
-	) {
-		super('activitybar.additionalViewlets.action', nls.localize('additionalViews', "Additional Views"), 'toggle-more');
-	}
-
-	public run(event): TPromise<any> {
-		this.showMenu();
-
-		return TPromise.as(true);
-	}
-}
-
-export class ViewletOverflowActivityActionItem extends BaseActionItem {
-	private $e: Builder;
-	private name: string;
-	private cssClass: string;
-	private actions: OpenViewletAction[];
-
-	constructor(
-		action: ActivityAction,
-		private getOverflowingViewlets: () => ViewletDescriptor[],
-		private getBadge: (viewlet: ViewletDescriptor) => IBadge,
-		@IInstantiationService private instantiationService: IInstantiationService,
-		@IViewletService private viewletService: IViewletService,
-		@IKeybindingService private keybindingService: IKeybindingService,
-		@IContextMenuService private contextMenuService: IContextMenuService,
-	) {
-		super(null, action);
-
-		this.cssClass = action.class;
-		this.name = action.label;
-	}
-
-	public render(container: HTMLElement): void {
-		super.render(container);
-
-		this.$e = $('a.action-label').attr({
-			tabIndex: '0',
-			role: 'button',
-			title: this.name,
-			class: this.cssClass
-		}).appendTo(this.builder);
-	}
-
-	public showMenu(): void {
-		if (this.actions) {
-			dispose(this.actions);
-		}
-
-		this.actions = this.getActions();
-
-		this.contextMenuService.showContextMenu({
-			getAnchor: () => this.builder.getHTMLElement(),
-			getActions: () => TPromise.as(this.actions),
-			getKeyBinding: (action) => this.getKeybinding(action),
-			onHide: () => dispose(this.actions)
-		});
-	}
-
-	private getKeybinding(action: IAction): Keybinding {
-		const [kb] = this.keybindingService.lookupKeybindings(action.id);
-
-		return kb;
-	}
-
-	private getActions(): OpenViewletAction[] {
-		const activeViewlet = this.viewletService.getActiveViewlet();
-
-		return this.getOverflowingViewlets().map(viewlet => {
-			const action = this.instantiationService.createInstance(OpenViewletAction, viewlet);
-			action.radio = activeViewlet && activeViewlet.getId() === action.id;
-
-			const badge = this.getBadge(action.viewlet);
-			let suffix: string | number;
-			if (badge instanceof NumberBadge) {
-				suffix = badge.number;
-			} else if (badge instanceof TextBadge) {
-				suffix = badge.text;
-			}
-
-			if (suffix) {
-				action.label = nls.localize('numberBadge', "{0} ({1})", action.viewlet.name, suffix);
-			} else {
-				action.label = action.viewlet.name;
-			}
-
-			return action;
-		});
-	}
-
-	public dispose(): void {
-		super.dispose();
-
-		this.actions = dispose(this.actions);
-	}
-}
-
-class ManageExtensionAction extends Action {
-
-	constructor(
-		@ICommandService private commandService: ICommandService
-	) {
-		super('activitybar.manage.extension', nls.localize('manageExtension', "Manage Extension"));
-	}
-
-	public run(viewlet: ViewletDescriptor): TPromise<any> {
-		return this.commandService.executeCommand('_extensions.manage', viewlet.extensionId);
-	}
-}
-
-class OpenViewletAction extends Action {
+export class ToggleViewletAction extends Action {
 
 	constructor(
 		private _viewlet: ViewletDescriptor,
-		@IPartService private partService: IPartService,
-		@IViewletService private viewletService: IViewletService
+		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
+		@IViewletService private readonly viewletService: IViewletService
 	) {
 		super(_viewlet.id, _viewlet.name);
 	}
 
-	public get viewlet(): ViewletDescriptor {
-		return this._viewlet;
-	}
-
-	public run(): TPromise<any> {
-		const sideBarVisible = this.partService.isVisible(Parts.SIDEBAR_PART);
+	run(): Promise<any> {
+		const sideBarVisible = this.layoutService.isVisible(Parts.SIDEBAR_PART);
 		const activeViewlet = this.viewletService.getActiveViewlet();
 
 		// Hide sidebar if selected viewlet already visible
-		if (sideBarVisible && activeViewlet && activeViewlet.getId() === this.viewlet.id) {
-			return this.partService.setSideBarHidden(true);
+		if (sideBarVisible && activeViewlet && activeViewlet.getId() === this._viewlet.id) {
+			this.layoutService.setSideBarHidden(true);
+			return Promise.resolve();
 		}
 
-		return this.viewletService.openViewlet(this.viewlet.id, true);
+		return this.viewletService.openViewlet(this._viewlet.id, true);
 	}
 }
 
-export class ToggleViewletPinnedAction extends Action {
+export class GlobalActivityAction extends ActivityAction {
+
+	constructor(activity: IGlobalActivity) {
+		super(activity);
+	}
+}
+
+export class GlobalActivityActionItem extends ActivityActionItem {
 
 	constructor(
-		private viewlet: ViewletDescriptor,
-		@IActivityBarService private activityBarService: IActivityBarService
+		action: GlobalActivityAction,
+		colors: (theme: ITheme) => ICompositeBarColors,
+		@IThemeService themeService: IThemeService,
+		@IContextMenuService protected contextMenuService: IContextMenuService
 	) {
-		super('activitybar.show.toggleViewletPinned', viewlet ? viewlet.name : nls.localize('toggle', "Toggle View Pinned"));
-
-		this.checked = this.viewlet && this.activityBarService.isPinned(this.viewlet.id);
+		super(action, { draggable: false, colors, icon: true }, themeService);
 	}
 
-	public run(context?: ViewletDescriptor): TPromise<any> {
-		const viewlet = this.viewlet || context;
+	render(container: HTMLElement): void {
+		super.render(container);
 
-		if (this.activityBarService.isPinned(viewlet.id)) {
-			this.activityBarService.unpin(viewlet.id);
-		} else {
-			this.activityBarService.pin(viewlet.id);
-		}
+		// Context menus are triggered on mouse down so that an item can be picked
+		// and executed with releasing the mouse over it
 
-		return TPromise.as(true);
+		this._register(DOM.addDisposableListener(this.container, DOM.EventType.MOUSE_DOWN, (e: MouseEvent) => {
+			DOM.EventHelper.stop(e, true);
+			this.showContextMenu();
+		}));
+
+		this._register(DOM.addDisposableListener(this.container, DOM.EventType.KEY_UP, (e: KeyboardEvent) => {
+			let event = new StandardKeyboardEvent(e);
+			if (event.equals(KeyCode.Enter) || event.equals(KeyCode.Space)) {
+				DOM.EventHelper.stop(e, true);
+				this.showContextMenu();
+			}
+		}));
+
+		this._register(DOM.addDisposableListener(this.container, TouchEventType.Tap, (e: GestureEvent) => {
+			DOM.EventHelper.stop(e, true);
+			this.showContextMenu();
+		}));
+	}
+
+	private showContextMenu(): void {
+		const globalAction = this._action as GlobalActivityAction;
+		const activity = globalAction.activity as IGlobalActivity;
+		const actions = activity.getActions();
+		const containerPosition = DOM.getDomNodePagePosition(this.container);
+		const location = { x: containerPosition.left + containerPosition.width / 2, y: containerPosition.top };
+
+		this.contextMenuService.showContextMenu({
+			getAnchor: () => location,
+			getActions: () => actions,
+			onHide: () => dispose(actions)
+		});
 	}
 }
+
+export class PlaceHolderViewletActivityAction extends ViewletActivityAction {
+
+	constructor(
+		id: string, iconUrl: URI,
+		@IViewletService viewletService: IViewletService,
+		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
+		@ITelemetryService telemetryService: ITelemetryService
+	) {
+		super({ id, name: id, cssClass: `extensionViewlet-placeholder-${id.replace(/\./g, '-')}` }, viewletService, layoutService, telemetryService);
+
+		const iconClass = `.monaco-workbench .activitybar .monaco-action-bar .action-label.${this.class}`; // Generate Placeholder CSS to show the icon in the activity bar
+		DOM.createCSSRule(iconClass, `-webkit-mask: url('${iconUrl || ''}') no-repeat 50% 50%`);
+	}
+
+	setActivity(activity: IActivity): void {
+		this.activity = activity;
+	}
+}
+
+export class PlaceHolderToggleCompositePinnedAction extends ToggleCompositePinnedAction {
+
+	constructor(id: string, compositeBar: ICompositeBar) {
+		super({ id, name: id, cssClass: undefined }, compositeBar);
+	}
+
+	setActivity(activity: IActivity): void {
+		this.label = activity.name;
+	}
+}
+
+class SwitchSideBarViewAction extends Action {
+
+	constructor(
+		id: string,
+		name: string,
+		@IViewletService private readonly viewletService: IViewletService,
+		@IActivityBarService private readonly activityBarService: IActivityBarService
+	) {
+		super(id, name);
+	}
+
+	run(offset: number): Promise<any> {
+		const pinnedViewletIds = this.activityBarService.getPinnedViewletIds();
+
+		const activeViewlet = this.viewletService.getActiveViewlet();
+		if (!activeViewlet) {
+			return Promise.resolve();
+		}
+		let targetViewletId: string | undefined;
+		for (let i = 0; i < pinnedViewletIds.length; i++) {
+			if (pinnedViewletIds[i] === activeViewlet.getId()) {
+				targetViewletId = pinnedViewletIds[(i + pinnedViewletIds.length + offset) % pinnedViewletIds.length];
+				break;
+			}
+		}
+		return this.viewletService.openViewlet(targetViewletId, true);
+	}
+}
+
+export class PreviousSideBarViewAction extends SwitchSideBarViewAction {
+
+	static readonly ID = 'workbench.action.previousSideBarView';
+	static LABEL = nls.localize('previousSideBarView', 'Previous Side Bar View');
+
+	constructor(
+		id: string,
+		name: string,
+		@IViewletService viewletService: IViewletService,
+		@IActivityBarService activityBarService: IActivityBarService
+	) {
+		super(id, name, viewletService, activityBarService);
+	}
+
+	run(): Promise<any> {
+		return super.run(-1);
+	}
+}
+
+export class NextSideBarViewAction extends SwitchSideBarViewAction {
+
+	static readonly ID = 'workbench.action.nextSideBarView';
+	static LABEL = nls.localize('nextSideBarView', 'Next Side Bar View');
+
+	constructor(
+		id: string,
+		name: string,
+		@IViewletService viewletService: IViewletService,
+		@IActivityBarService activityBarService: IActivityBarService
+	) {
+		super(id, name, viewletService, activityBarService);
+	}
+
+	run(): Promise<any> {
+		return super.run(1);
+	}
+}
+
+const registry = Registry.as<IWorkbenchActionRegistry>(ActionExtensions.WorkbenchActions);
+registry.registerWorkbenchAction(new SyncActionDescriptor(PreviousSideBarViewAction, PreviousSideBarViewAction.ID, PreviousSideBarViewAction.LABEL), 'View: Open Previous Side Bar View', nls.localize('view', "View"));
+registry.registerWorkbenchAction(new SyncActionDescriptor(NextSideBarViewAction, NextSideBarViewAction.ID, NextSideBarViewAction.LABEL), 'View: Open Next Side Bar View', nls.localize('view', "View"));
+
+registerThemingParticipant((theme: ITheme, collector: ICssStyleCollector) => {
+
+	const activeForegroundColor = theme.getColor(ACTIVITY_BAR_FOREGROUND);
+	if (activeForegroundColor) {
+		collector.addRule(`
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.active .action-label,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:focus .action-label,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:hover .action-label {
+				background-color: ${activeForegroundColor} !important;
+			}
+		`);
+	}
+
+	// Styling with Outline color (e.g. high contrast theme)
+	const outline = theme.getColor(activeContrastBorder);
+	if (outline) {
+		collector.addRule(`
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:before {
+				content: "";
+				position: absolute;
+				top: 9px;
+				left: 9px;
+				height: 32px;
+				width: 32px;
+			}
+
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.active:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.active:hover:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.checked:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.checked:hover:before {
+				outline: 1px solid;
+			}
+
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:hover:before {
+				outline: 1px dashed;
+			}
+
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:focus:before {
+				border-left-color: ${outline};
+			}
+
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.active:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.active:hover:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.checked:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item.checked:hover:before,
+			.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:hover:before {
+				outline-color: ${outline};
+			}
+		`);
+	}
+
+	// Styling without outline color
+	else {
+		const focusBorderColor = theme.getColor(focusBorder);
+		if (focusBorderColor) {
+			collector.addRule(`
+					.monaco-workbench .activitybar > .content .monaco-action-bar .action-item:focus:before {
+						border-left-color: ${focusBorderColor};
+					}
+				`);
+		}
+	}
+});

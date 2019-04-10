@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IAction, IActionItem } from 'vs/base/common/actions';
-import { IEditorControl } from 'vs/platform/editor/common/editor';
 
 export interface IComposite {
 
@@ -16,7 +15,7 @@ export interface IComposite {
 	/**
 	 * Returns the name of this composite to show in the title area.
 	 */
-	getTitle(): string;
+	getTitle(): string | null;
 
 	/**
 	 * Returns the primary actions of the composite.
@@ -29,17 +28,27 @@ export interface IComposite {
 	getSecondaryActions(): IAction[];
 
 	/**
+	 * Returns an array of actions to show in the context menu of the composite
+	 */
+	getContextMenuActions(): IAction[];
+
+	/**
 	 * Returns the action item for a specific action.
 	 */
-	getActionItem(action: IAction): IActionItem;
+	getActionItem(action: IAction): IActionItem | undefined;
 
 	/**
 	 * Returns the underlying control of this composite.
 	 */
-	getControl(): IEditorControl;
+	getControl(): ICompositeControl | undefined;
 
 	/**
 	 * Asks the underlying control to focus.
 	 */
 	focus(): void;
 }
+
+/**
+ * Marker interface for the composite control
+ */
+export interface ICompositeControl { }

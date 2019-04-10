@@ -1,6 +1,8 @@
 {
 	"name": "coffeescript",
-	"version": "0.1.0",
+	"displayName": "%displayName%",
+	"description": "%description%",
+	"version": "1.0.0",
 	"publisher": "vscode",
 	"engines": { "vscode": "*" },
 	"scripts": {
@@ -9,7 +11,7 @@
 	"contributes": {
 		"languages": [{
 			"id": "coffeescript",
-			"extensions": [ ".coffee", ".cson" ],
+			"extensions": [ ".coffee", ".cson", ".iced" ],
 			"aliases": [ "CoffeeScript", "coffeescript", "coffee" ],
 			"configuration": "./language-configuration.json"
 		}],
@@ -22,6 +24,10 @@
 			{
 				"language": "coffeescript"
 			}
-		]
+		],
+		"snippets": [{
+			"language": "coffeescript",
+			"path": "./snippets/coffeescript.snippets.json"
+		}]
 	}
 }

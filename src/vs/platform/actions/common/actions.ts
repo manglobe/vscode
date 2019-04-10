@@ -2,23 +2,36 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
 import { Action } from 'vs/base/common/actions';
-import { TPromise } from 'vs/base/common/winjs.base';
 import { SyncDescriptor0, createSyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
 import { IConstructorSignature2, createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { IKeybindings } from 'vs/platform/keybinding/common/keybinding';
+import { IKeybindings, KeybindingsRegistry } from 'vs/platform/keybinding/common/keybindingsRegistry';
 import { ContextKeyExpr, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
-import { ICommandService } from 'vs/platform/commands/common/commands';
+import { ICommandService, ICommandHandler, CommandsRegistry } from 'vs/platform/commands/common/commands';
 import { IDisposable } from 'vs/base/common/lifecycle';
-import Event from 'vs/base/common/event';
+import { Event, Emitter } from 'vs/base/common/event';
+import { URI, UriComponents } from 'vs/base/common/uri';
 
-export interface ICommandAction {
+export interface ILocalizedString {
+	value: string;
+	original: string;
+}
+
+export interface IBaseCommandAction {
 	id: string;
-	title: string;
-	category?: string;
-	iconClass?: string;
+	title: string | ILocalizedString;
+	category?: string | ILocalizedString;
+}
+
+export interface ICommandAction extends IBaseCommandAction {
+	iconLocation?: { dark: URI; light?: URI; };
+	precondition?: ContextKeyExpr;
+	toggled?: ContextKeyExpr;
+}
+
+export interface ISerializableCommandAction extends IBaseCommandAction {
+	iconLocation?: { dark: UriComponents; light?: UriComponents; };
 }
 
 export interface IMenuItem {
@@ -29,35 +42,72 @@ export interface IMenuItem {
 	order?: number;
 }
 
-export class MenuId {
+export interface ISubmenuItem {
+	title: string | ILocalizedString;
+	submenu: MenuId;
+	when?: ContextKeyExpr;
+	group?: 'navigation' | string;
+	order?: number;
+}
 
-	static readonly EditorTitle = new MenuId('1');
-	static readonly EditorTitleContext = new MenuId('2');
-	static readonly EditorContext = new MenuId('3');
-	static readonly ExplorerContext = new MenuId('4');
-	static readonly ProblemsPanelContext = new MenuId('5');
-	static readonly DebugVariablesContext = new MenuId('6');
-	static readonly DebugWatchContext = new MenuId('7');
-	static readonly DebugCallStackContext = new MenuId('8');
-	static readonly DebugBreakpointsContext = new MenuId('9');
-	static readonly DebugConsoleContext = new MenuId('10');
-	static readonly SCMTitle = new MenuId('11');
-	static readonly SCMResourceGroupContext = new MenuId('12');
-	static readonly SCMResourceContext = new MenuId('13');
-	static readonly CommandPalette = new MenuId('14');
+export function isIMenuItem(item: IMenuItem | ISubmenuItem): item is IMenuItem {
+	return (item as IMenuItem).command !== undefined;
+}
 
-	constructor(private _id: string) {
+export function isISubmenuItem(item: IMenuItem | ISubmenuItem): item is ISubmenuItem {
+	return (item as ISubmenuItem).submenu !== undefined;
+}
 
-	}
+export const enum MenuId {
+	CommandPalette,
+	DebugBreakpointsContext,
+	DebugCallStackContext,
+	DebugConsoleContext,
+	DebugVariablesContext,
+	DebugWatchContext,
+	DebugToolBar,
+	EditorContext,
+	EditorTitle,
+	EditorTitleContext,
+	EmptyEditorGroupContext,
+	ExplorerContext,
+	MenubarAppearanceMenu,
+	MenubarDebugMenu,
+	MenubarEditMenu,
+	MenubarFileMenu,
+	MenubarGoMenu,
+	MenubarHelpMenu,
+	MenubarLayoutMenu,
+	MenubarNewBreakpointMenu,
+	MenubarPreferencesMenu,
+	MenubarRecentMenu,
+	MenubarSelectionMenu,
+	MenubarSwitchEditorMenu,
+	MenubarSwitchGroupMenu,
+	MenubarTerminalMenu,
+	MenubarViewMenu,
+	OpenEditorsContext,
+	ProblemsPanelContext,
+	SCMChangeContext,
+	SCMResourceContext,
+	SCMResourceGroupContext,
+	SCMSourceControl,
+	SCMTitle,
+	SearchContext,
+	StatusBarWindowIndicatorMenu,
+	TouchBarContext,
+	ViewItemContext,
+	ViewTitle,
+}
 
-	get id(): string {
-		return this._id;
-	}
+export interface IMenuActionOptions {
+	arg?: any;
+	shouldForwardArgs?: boolean;
 }
 
 export interface IMenu extends IDisposable {
-	onDidChange: Event<IMenu>;
-	getActions(arg?: any): [string, MenuItemAction[]][];
+	readonly onDidChange: Event<IMenu | undefined>;
+	getActions(options?: IMenuActionOptions): [string, Array<MenuItemAction | SubmenuItemAction>][];
 }
 
 export const IMenuService = createDecorator<IMenuService>('menuService');
@@ -70,50 +120,73 @@ export interface IMenuService {
 }
 
 export interface IMenuRegistry {
-	commands: { [id: string]: ICommandAction };
-	addCommand(userCommand: ICommandAction): boolean;
+	addCommand(userCommand: ICommandAction): IDisposable;
 	getCommand(id: string): ICommandAction;
-	appendMenuItem(menu: MenuId, item: IMenuItem): IDisposable;
-	getMenuItems(loc: MenuId): IMenuItem[];
+	getCommands(): ICommandsMap;
+	appendMenuItem(menu: MenuId, item: IMenuItem | ISubmenuItem): IDisposable;
+	getMenuItems(loc: MenuId): Array<IMenuItem | ISubmenuItem>;
+	readonly onDidChangeMenu: Event<MenuId>;
 }
 
-export const MenuRegistry: IMenuRegistry = new class {
+export interface ICommandsMap {
+	[id: string]: ICommandAction;
+}
 
-	commands: { [id: string]: ICommandAction } = Object.create(null);
+export const MenuRegistry: IMenuRegistry = new class implements IMenuRegistry {
 
-	menuItems: { [loc: string]: IMenuItem[] } = Object.create(null);
+	private readonly _commands: { [id: string]: ICommandAction } = Object.create(null);
+	private readonly _menuItems: { [loc: number]: Array<IMenuItem | ISubmenuItem> } = Object.create(null);
+	private readonly _onDidChangeMenu = new Emitter<MenuId>();
 
-	addCommand(command: ICommandAction): boolean {
-		const old = this.commands[command.id];
-		this.commands[command.id] = command;
-		return old !== void 0;
-	}
+	readonly onDidChangeMenu: Event<MenuId> = this._onDidChangeMenu.event;
 
-	getCommand(id: string): ICommandAction {
-		return this.commands[id];
-	}
-
-	appendMenuItem({ id }: MenuId, item: IMenuItem): IDisposable {
-		let array = this.menuItems[id];
-		if (!array) {
-			this.menuItems[id] = array = [item];
-		} else {
-			array.push(item);
-		}
+	addCommand(command: ICommandAction): IDisposable {
+		this._commands[command.id] = command;
+		this._onDidChangeMenu.fire(MenuId.CommandPalette);
 		return {
-			dispose() {
-				const idx = array.indexOf(item);
-				if (idx >= 0) {
-					array.splice(idx, 1);
+			dispose: () => {
+				if (delete this._commands[command.id]) {
+					this._onDidChangeMenu.fire(MenuId.CommandPalette);
 				}
 			}
 		};
 	}
 
-	getMenuItems({ id }: MenuId): IMenuItem[] {
-		const result = this.menuItems[id] || [];
+	getCommand(id: string): ICommandAction {
+		return this._commands[id];
+	}
 
-		if (id === MenuId.CommandPalette.id) {
+	getCommands(): ICommandsMap {
+		const result: ICommandsMap = Object.create(null);
+		for (const key in this._commands) {
+			result[key] = this.getCommand(key);
+		}
+		return result;
+	}
+
+	appendMenuItem(id: MenuId, item: IMenuItem | ISubmenuItem): IDisposable {
+		let array = this._menuItems[id];
+		if (!array) {
+			this._menuItems[id] = array = [item];
+		} else {
+			array.push(item);
+		}
+		this._onDidChangeMenu.fire(id);
+		return {
+			dispose: () => {
+				const idx = array.indexOf(item);
+				if (idx >= 0) {
+					array.splice(idx, 1);
+					this._onDidChangeMenu.fire(id);
+				}
+			}
+		};
+	}
+
+	getMenuItems(id: MenuId): Array<IMenuItem | ISubmenuItem> {
+		const result = (this._menuItems[id] || []).slice(0);
+
+		if (id === MenuId.CommandPalette) {
 			// CommandPalette is special because it shows
 			// all commands by default
 			this._appendImplicitItems(result);
@@ -121,17 +194,20 @@ export const MenuRegistry: IMenuRegistry = new class {
 		return result;
 	}
 
-	private _appendImplicitItems(result: IMenuItem[]) {
+	private _appendImplicitItems(result: Array<IMenuItem | ISubmenuItem>) {
 		const set = new Set<string>();
-		for (const { command, alt } of result) {
+
+		const temp = result.filter(item => { return isIMenuItem(item); }) as IMenuItem[];
+
+		for (const { command, alt } of temp) {
 			set.add(command.id);
 			if (alt) {
 				set.add(alt.id);
 			}
 		}
-		for (let id in this.commands) {
+		for (let id in this._commands) {
 			if (!set.has(id)) {
-				result.push({ command: this.commands[id] });
+				result.push({ command: this._commands[id] });
 			}
 		}
 	}
@@ -142,40 +218,62 @@ export class ExecuteCommandAction extends Action {
 	constructor(
 		id: string,
 		label: string,
-		@ICommandService private _commandService: ICommandService) {
+		@ICommandService private readonly _commandService: ICommandService) {
 
 		super(id, label);
 	}
 
-	run(...args: any[]): TPromise<any> {
+	run(...args: any[]): Promise<any> {
 		return this._commandService.executeCommand(this.id, ...args);
+	}
+}
+
+export class SubmenuItemAction extends Action {
+
+	readonly item: ISubmenuItem;
+	constructor(item: ISubmenuItem) {
+		typeof item.title === 'string' ? super('', item.title, 'submenu') : super('', item.title.value, 'submenu');
+		this.item = item;
 	}
 }
 
 export class MenuItemAction extends ExecuteCommandAction {
 
-	private _arg: any;
-
 	readonly item: ICommandAction;
-	readonly alt: MenuItemAction;
+	readonly alt: MenuItemAction | undefined;
+
+	private _options: IMenuActionOptions;
 
 	constructor(
 		item: ICommandAction,
-		alt: ICommandAction,
-		arg: any,
+		alt: ICommandAction | undefined,
+		options: IMenuActionOptions,
+		@IContextKeyService contextKeyService: IContextKeyService,
 		@ICommandService commandService: ICommandService
 	) {
-		super(item.id, item.title, commandService);
-		this._cssClass = item.iconClass;
-		this._enabled = true;
-		this._arg = arg;
+		typeof item.title === 'string' ? super(item.id, item.title, commandService) : super(item.id, item.title.value, commandService);
+		this._cssClass = undefined;
+		this._enabled = !item.precondition || contextKeyService.contextMatchesRules(item.precondition);
+		this._checked = Boolean(item.toggled && contextKeyService.contextMatchesRules(item.toggled));
+
+		this._options = options || {};
 
 		this.item = item;
-		this.alt = alt ? new MenuItemAction(alt, undefined, arg, commandService) : undefined;
+		this.alt = alt ? new MenuItemAction(alt, undefined, this._options, contextKeyService, commandService) : undefined;
 	}
 
-	run(): TPromise<any> {
-		return super.run(this._arg);
+	run(...args: any[]): Promise<any> {
+		let runArgs: any[] = [];
+
+		if (this._options.arg) {
+			runArgs = [...runArgs, this._options.arg];
+		}
+
+		if (this._options.shouldForwardArgs) {
+			runArgs = [...runArgs, ...args];
+		}
+
+		return super.run(...runArgs);
 	}
 }
 
@@ -184,13 +282,13 @@ export class SyncActionDescriptor {
 	private _descriptor: SyncDescriptor0<Action>;
 
 	private _id: string;
-	private _label: string;
-	private _keybindings: IKeybindings;
-	private _keybindingContext: ContextKeyExpr;
-	private _keybindingWeight: number;
+	private _label?: string;
+	private _keybindings: IKeybindings | undefined;
+	private _keybindingContext: ContextKeyExpr | undefined;
+	private _keybindingWeight: number | undefined;
 
 	constructor(ctor: IConstructorSignature2<string, string, Action>,
-		id: string, label: string, keybindings?: IKeybindings, keybindingContext?: ContextKeyExpr, keybindingWeight?: number
+		id: string, label: string | undefined, keybindings?: IKeybindings, keybindingContext?: ContextKeyExpr, keybindingWeight?: number
 	) {
 		this._id = id;
 		this._label = label;
@@ -208,19 +306,79 @@ export class SyncActionDescriptor {
 		return this._id;
 	}
 
-	public get label(): string {
+	public get label(): string | undefined {
 		return this._label;
 	}
 
-	public get keybindings(): IKeybindings {
+	public get keybindings(): IKeybindings | undefined {
 		return this._keybindings;
 	}
 
-	public get keybindingContext(): ContextKeyExpr {
+	public get keybindingContext(): ContextKeyExpr | undefined {
 		return this._keybindingContext;
 	}
 
-	public get keybindingWeight(): number {
+	public get keybindingWeight(): number | undefined {
 		return this._keybindingWeight;
+	}
+}
+
+
+export interface IActionDescriptor {
+	id: string;
+	handler: ICommandHandler;
+
+	// ICommandUI
+	title?: ILocalizedString;
+	category?: string;
+	f1?: boolean;
+
+	//
+	menu?: {
+		menuId: MenuId,
+		when?: ContextKeyExpr;
+		group?: string;
+	};
+
+	//
+	keybinding?: {
+		when?: ContextKeyExpr;
+		weight?: number;
+		keys: IKeybindings;
+	};
+}
+
+
+export function registerAction(desc: IActionDescriptor) {
+
+	const { id, handler, title, category, menu, keybinding } = desc;
+
+	// 1) register as command
+	CommandsRegistry.registerCommand(id, handler);
+
+	// 2) menus
+	if (menu && title) {
+		let command = { id, title, category };
+		let { menuId, when, group } = menu;
+		MenuRegistry.appendMenuItem(menuId, {
+			command,
+			when,
+			group
+		});
+	}
+
+	// 3) keybindings
+	if (keybinding) {
+		let { when, weight, keys } = keybinding;
+		KeybindingsRegistry.registerKeybindingRule({
+			id,
+			when,
+			weight: weight || 0,
+			primary: keys.primary,
+			secondary: keys.secondary,
+			linux: keys.linux,
+			mac: keys.mac,
+			win: keys.win
+		});
 	}
 }

@@ -2,39 +2,35 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
-
 
 import * as assert from 'assert';
-import { LcsDiff, IDiffChange } from 'vs/base/common/diff/diff';
-import { LcsDiff2 } from 'vs/base/common/diff/diff2';
+import { LcsDiff, IDiffChange, ISequence } from 'vs/base/common/diff/diff';
 
-class StringDiffSequence {
+class StringDiffSequence implements ISequence {
 
 	constructor(private source: string) {
-
 	}
 
 	getLength() {
 		return this.source.length;
 	}
 
-	getElementHash(i) {
-		return this.source.charAt(i);
+	getElementAtIndex(i: number) {
+		return this.source.charCodeAt(i);
 	}
 }
 
 function createArray<T>(length: number, value: T): T[] {
-	var r = [];
-	for (var i = 0; i < length; i++) {
+	const r: T[] = [];
+	for (let i = 0; i < length; i++) {
 		r[i] = value;
 	}
 	return r;
 }
 
 function maskBasedSubstring(str: string, mask: boolean[]): string {
-	var r = '';
-	for (var i = 0; i < str.length; i++) {
+	let r = '';
+	for (let i = 0; i < str.length; i++) {
 		if (mask[i]) {
 			r += str.charAt(i);
 		}
@@ -43,10 +39,10 @@ function maskBasedSubstring(str: string, mask: boolean[]): string {
 }
 
 function assertAnswer(originalStr: string, modifiedStr: string, changes: IDiffChange[], answerStr: string, onlyLength: boolean = false): void {
-	var originalMask = createArray(originalStr.length, true);
-	var modifiedMask = createArray(modifiedStr.length, true);
+	let originalMask = createArray(originalStr.length, true);
+	let modifiedMask = createArray(modifiedStr.length, true);
 
-	var i, j, change;
+	let i, j, change;
 	for (i = 0; i < changes.length; i++) {
 		change = changes[i];
 
@@ -63,8 +59,8 @@ function assertAnswer(originalStr: string, modifiedStr: string, changes: IDiffCh
 		}
 	}
 
-	var originalAnswer = maskBasedSubstring(originalStr, originalMask);
-	var modifiedAnswer = maskBasedSubstring(modifiedStr, modifiedMask);
+	let originalAnswer = maskBasedSubstring(originalStr, originalMask);
+	let modifiedAnswer = maskBasedSubstring(modifiedStr, modifiedMask);
 
 	if (onlyLength) {
 		assert.equal(originalAnswer.length, answerStr.length);
@@ -76,14 +72,14 @@ function assertAnswer(originalStr: string, modifiedStr: string, changes: IDiffCh
 }
 
 function lcsInnerTest(Algorithm: any, originalStr: string, modifiedStr: string, answerStr: string, onlyLength: boolean = false): void {
-	var diff = new Algorithm(new StringDiffSequence(originalStr), new StringDiffSequence(modifiedStr));
-	var changes = diff.ComputeDiff();
+	let diff = new Algorithm(new StringDiffSequence(originalStr), new StringDiffSequence(modifiedStr));
+	let changes = diff.ComputeDiff();
 	assertAnswer(originalStr, modifiedStr, changes, answerStr, onlyLength);
 }
 
 function stringPower(str: string, power: number): string {
-	var r = str;
-	for (var i = 0; i < power; i++) {
+	let r = str;
+	for (let i = 0; i < power; i++) {
 		r += r;
 	}
 	return r;
@@ -91,12 +87,12 @@ function stringPower(str: string, power: number): string {
 
 function lcsTest(Algorithm: any, originalStr: string, modifiedStr: string, answerStr: string) {
 	lcsInnerTest(Algorithm, originalStr, modifiedStr, answerStr);
-	for (var i = 2; i <= 5; i++) {
+	for (let i = 2; i <= 5; i++) {
 		lcsInnerTest(Algorithm, stringPower(originalStr, i), stringPower(modifiedStr, i), stringPower(answerStr, i), true);
 	}
 }
 
-function lcsTests(Algorithm) {
+function lcsTests(Algorithm: any) {
 	lcsTest(Algorithm, 'heLLo world', 'hello orlando', 'heo orld');
 	lcsTest(Algorithm, 'abcde', 'acd', 'acd'); // simple
 	lcsTest(Algorithm, 'abcdbce', 'bcede', 'bcde'); // skip
@@ -113,24 +109,21 @@ function lcsTests(Algorithm) {
 
 suite('Diff', () => {
 	test('LcsDiff - different strings tests', function () {
+		this.timeout(10000);
 		lcsTests(LcsDiff);
-	});
-
-	test('LcsDiff2 - different strings tests', function () {
-		lcsTests(LcsDiff2);
 	});
 });
 
 suite('Diff - Ported from VS', () => {
 	test('using continue processing predicate to quit early', function () {
-		var left = 'abcdef';
-		var right = 'abxxcyyydzzzzezzzzzzzzzzzzzzzzzzzzf';
+		let left = 'abcdef';
+		let right = 'abxxcyyydzzzzezzzzzzzzzzzzzzzzzzzzf';
 
 		// We use a long non-matching portion at the end of the right-side string, so the backwards tracking logic
 		// doesn't get there first.
-		var predicateCallCount = 0;
+		let predicateCallCount = 0;
 
-		var diff = new LcsDiff(new StringDiffSequence(left), new StringDiffSequence(right), function (leftIndex, leftSequence, longestMatchSoFar) {
+		let diff = new LcsDiff(new StringDiffSequence(left), new StringDiffSequence(right), function (leftIndex, leftSequence, longestMatchSoFar) {
 			assert.equal(predicateCallCount, 0);
 
 			predicateCallCount++;
@@ -141,7 +134,7 @@ suite('Diff - Ported from VS', () => {
 			// cancel processing
 			return false;
 		});
-		var changes = diff.ComputeDiff();
+		let changes = diff.ComputeDiff(true);
 
 		assert.equal(predicateCallCount, 1);
 
@@ -157,7 +150,7 @@ suite('Diff - Ported from VS', () => {
 			// Continue processing as long as there hasn't been a match made.
 			return longestMatchSoFar < 1;
 		});
-		changes = diff.ComputeDiff();
+		changes = diff.ComputeDiff(true);
 
 		assertAnswer(left, right, changes, 'abcf');
 
@@ -170,23 +163,23 @@ suite('Diff - Ported from VS', () => {
 			// Continue processing as long as there hasn't been a match made.
 			return longestMatchSoFar < 2;
 		});
-		changes = diff.ComputeDiff();
+		changes = diff.ComputeDiff(true);
 
 		assertAnswer(left, right, changes, 'abcdf');
 
 
 
 		// Cancel *one iteration* after the second match ('d')
-		var hitSecondMatch = false;
+		let hitSecondMatch = false;
 		diff = new LcsDiff(new StringDiffSequence(left), new StringDiffSequence(right), function (leftIndex, leftSequence, longestMatchSoFar) {
 			assert(longestMatchSoFar <= 2); // We never see a match of length > 2
 
-			var hitYet = hitSecondMatch;
+			let hitYet = hitSecondMatch;
 			hitSecondMatch = longestMatchSoFar > 1;
 			// Continue processing as long as there hasn't been a match made.
 			return !hitYet;
 		});
-		changes = diff.ComputeDiff();
+		changes = diff.ComputeDiff(true);
 
 		assertAnswer(left, right, changes, 'abcdf');
 
@@ -199,7 +192,7 @@ suite('Diff - Ported from VS', () => {
 			// Continue processing as long as there hasn't been a match made.
 			return longestMatchSoFar < 3;
 		});
-		changes = diff.ComputeDiff();
+		changes = diff.ComputeDiff(true);
 
 		assertAnswer(left, right, changes, 'abcdef');
 	});

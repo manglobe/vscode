@@ -3,14 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as fs from 'fs';
-import * as path from 'path';
+import { dirname } from 'vs/base/common/path';
 import * as objects from 'vs/base/common/objects';
-import { IDisposable, dispose, toDisposable } from 'vs/base/common/lifecycle';
-import Event, { Emitter } from 'vs/base/common/event';
+import { IDisposable, dispose } from 'vs/base/common/lifecycle';
+import { Event, Emitter } from 'vs/base/common/event';
 import * as json from 'vs/base/common/json';
+import { readlink, statLink } from 'vs/base/node/pfs';
+import { watchFolder, watchFile } from 'vs/base/node/watcher';
 
 export interface IConfigurationChangeEvent<T> {
 	config: T;
@@ -22,13 +22,14 @@ export interface IConfigWatcher<T> {
 
 	reload(callback: (config: T) => void): void;
 	getConfig(): T;
-	getValue<V>(key: string, fallback?: V): V;
 }
 
 export interface IConfigOptions<T> {
-	defaultConfig?: T;
+	onError: (error: Error | string) => void;
+	defaultConfig: T;
 	changeBufferDelay?: number;
 	parse?: (content: string, errors: any[]) => T;
+	initCallback?: (config: T) => void;
 }
 
 /**
@@ -44,11 +45,11 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 	private parseErrors: json.ParseError[];
 	private disposed: boolean;
 	private loaded: boolean;
-	private timeoutHandle: number;
+	private timeoutHandle: NodeJS.Timer | null;
 	private disposables: IDisposable[];
-	private _onDidUpdateConfiguration: Emitter<IConfigurationChangeEvent<T>>;
+	private readonly _onDidUpdateConfiguration: Emitter<IConfigurationChangeEvent<T>>;
 
-	constructor(private _path: string, private options: IConfigOptions<T> = { changeBufferDelay: 0, defaultConfig: Object.create(null) }) {
+	constructor(private _path: string, private options: IConfigOptions<T> = { defaultConfig: Object.create(null), onError: error => console.error(error) }) {
 		this.disposables = [];
 
 		this._onDidUpdateConfiguration = new Emitter<IConfigurationChangeEvent<T>>();
@@ -58,15 +59,15 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		this.initAsync();
 	}
 
-	public get path(): string {
+	get path(): string {
 		return this._path;
 	}
 
-	public get hasParseErrors(): boolean {
+	get hasParseErrors(): boolean {
 		return this.parseErrors && this.parseErrors.length > 0;
 	}
 
-	public get onDidUpdateConfiguration(): Event<IConfigurationChangeEvent<T>> {
+	get onDidUpdateConfiguration(): Event<IConfigurationChangeEvent<T>> {
 		return this._onDidUpdateConfiguration.event;
 	}
 
@@ -74,6 +75,9 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		this.loadAsync(config => {
 			if (!this.loaded) {
 				this.updateCache(config); // prevent race condition if config was loaded sync already
+			}
+			if (this.options.initCallback) {
+				this.options.initCallback(this.getConfig());
 			}
 		});
 	}
@@ -106,57 +110,41 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		try {
 			this.parseErrors = [];
 			res = this.options.parse ? this.options.parse(raw, this.parseErrors) : json.parse(raw, this.parseErrors);
+			return res || this.options.defaultConfig;
 		} catch (error) {
 			// Ignore parsing errors
+			return this.options.defaultConfig;
 		}
-
-		return res || this.options.defaultConfig;
 	}
 
 	private registerWatcher(): void {
 
 		// Watch the parent of the path so that we detect ADD and DELETES
-		const parentFolder = path.dirname(this._path);
-		this.watch(parentFolder);
+		const parentFolder = dirname(this._path);
+		this.watch(parentFolder, true);
 
 		// Check if the path is a symlink and watch its target if so
-		fs.lstat(this._path, (err, stat) => {
-			if (err || stat.isDirectory()) {
-				return; // path is not a valid file
-			}
-
-			// We found a symlink
-			if (stat.isSymbolicLink()) {
-				fs.readlink(this._path, (err, realPath) => {
-					if (err) {
-						return; // path is not a valid symlink
-					}
-
-					this.watch(realPath);
-				});
-			}
-		});
+		this.handleSymbolicLink().then(undefined, error => { /* ignore error */ });
 	}
 
-	private watch(path: string): void {
+	private async handleSymbolicLink(): Promise<void> {
+		const { stat, isSymbolicLink } = await statLink(this._path);
+		if (isSymbolicLink && !stat.isDirectory()) {
+			const realPath = await readlink(this._path);
+
+			this.watch(realPath, false);
+		}
+	}
+
+	private watch(path: string, isFolder: boolean): void {
 		if (this.disposed) {
 			return; // avoid watchers that will never get disposed by checking for being disposed
 		}
 
-		try {
-			const watcher = fs.watch(path);
-			watcher.on('change', () => this.onConfigFileChange());
-
-			this.disposables.push(toDisposable(() => {
-				watcher.removeAllListeners();
-				watcher.close();
-			}));
-		} catch (error) {
-			fs.exists(path, exists => {
-				if (exists) {
-					console.warn(`Failed to watch ${path} for configuration changes (${error.toString()})`);
-				}
-			});
+		if (isFolder) {
+			this.disposables.push(watchFolder(path, (type, path) => path === this._path ? this.onConfigFileChange() : undefined, error => this.options.onError(error)));
+		} else {
+			this.disposables.push(watchFile(path, (type, path) => this.onConfigFileChange(), error => this.options.onError(error)));
 		}
 	}
 
@@ -167,10 +155,10 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		}
 
 		// we can get multiple change events for one change, so we buffer through a timeout
-		this.timeoutHandle = global.setTimeout(() => this.reload(), this.options.changeBufferDelay);
+		this.timeoutHandle = global.setTimeout(() => this.reload(), this.options.changeBufferDelay || 0);
 	}
 
-	public reload(callback?: (config: T) => void): void {
+	reload(callback?: (config: T) => void): void {
 		this.loadAsync(currentConfig => {
 			if (!objects.equals(currentConfig, this.cache)) {
 				this.updateCache(currentConfig);
@@ -184,22 +172,10 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		});
 	}
 
-	public getConfig(): T {
+	getConfig(): T {
 		this.ensureLoaded();
 
 		return this.cache;
-	}
-
-	public getValue<V>(key: string, fallback?: V): V {
-		this.ensureLoaded();
-
-		if (!key) {
-			return fallback;
-		}
-
-		const value = this.cache ? this.cache[key] : void 0;
-
-		return typeof value !== 'undefined' ? value : fallback;
 	}
 
 	private ensureLoaded(): void {
@@ -208,7 +184,7 @@ export class ConfigWatcher<T> implements IConfigWatcher<T>, IDisposable {
 		}
 	}
 
-	public dispose(): void {
+	dispose(): void {
 		this.disposed = true;
 		this.disposables = dispose(this.disposables);
 	}
